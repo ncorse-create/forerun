@@ -8,6 +8,7 @@ import SwiftUI
 /// coloured by who it is for, with the date and a relative label above the sentence.
 struct PlanScreen: View {
     @Environment(AppEnvironment.self) private var app
+    @Environment(\.dismiss) private var dismiss
     @Bindable var event: TrackedEvent
 
     @State private var editingStep: PrepStep?
@@ -18,6 +19,7 @@ struct PlanScreen: View {
     @State private var handoff = HandoffController()
     @State private var workBlockMessage: String?
     @State private var isSharing = false
+    @State private var isConfirmingUntrack = false
 
     private var steps: [PrepStep] {
         event.plan?.orderedSteps ?? []
@@ -86,6 +88,10 @@ struct PlanScreen: View {
                     Button("Rebuild plan", systemImage: "arrow.clockwise") {
                         regenerationPreview = app.planning.regenerationPreview(for: event)
                     }
+                    Divider()
+                    Button("Stop tracking", systemImage: "minus.circle", role: .destructive) {
+                        isConfirmingUntrack = true
+                    }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
                 }
@@ -99,6 +105,22 @@ struct PlanScreen: View {
         }
         .sheet(isPresented: $isCorrectingKind) {
             KindPickerSheet(event: event)
+        }
+        .confirmationDialog(
+            "Stop tracking this event?",
+            isPresented: $isConfirmingUntrack,
+            titleVisibility: .visible
+        ) {
+            Button("Stop tracking", role: .destructive) {
+                Task {
+                    await app.untrack(event.normalizedForUntracking)
+                    dismiss()
+                }
+            }
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text("Its plan and anything you attached to it go with it. You'll get a moment to "
+                 + "undo.")
         }
         .sheet(isPresented: $isSharing) {
             // Plain text, shared however the user likes. No sync infrastructure, no account for

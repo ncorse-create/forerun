@@ -15,6 +15,7 @@ struct EventsScreen: View {
     @State private var confirmingUntrack: NormalizedEvent?
     @State private var showingRules = false
     @State private var showingSettings = false
+    @State private var showingBulkAdd = false
 
     private var trackedSourceIDs: Set<String> {
         Set(trackedEvents.map(\.sourceID))
@@ -46,8 +47,20 @@ struct EventsScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .paperBackground()
+            .safeAreaInset(edge: .bottom) {
+                UndoBanner()
+                    .animation(.easeOut(duration: 0.2), value: app.pendingUndo)
+            }
             .navigationTitle("Events")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingBulkAdd = true
+                    } label: {
+                        Label("Add in bulk", systemImage: "calendar.badge.plus")
+                    }
+                    .disabled(app.sync.browsableEvents.isEmpty)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingRules = true
@@ -65,6 +78,7 @@ struct EventsScreen: View {
             }
             .sheet(isPresented: $showingRules) { TrackingRulesSheet() }
             .sheet(isPresented: $showingSettings) { SettingsScreen() }
+            .sheet(isPresented: $showingBulkAdd) { BulkAddScreen() }
             .refreshable { await app.refresh() }
             .task { await app.refresh() }
             .confirmationDialog(

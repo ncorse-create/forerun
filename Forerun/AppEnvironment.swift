@@ -251,9 +251,97 @@ final class AppEnvironment {
         await scheduler.requestAuthorizationIfNeeded()
     }
 
+    // MARK: Undo
+
+    /// What the last reversible action was, and how to say it.
+    struct UndoableAction: Equatable {
+        enum Kind: Equatable {
+            case tracked(sourceIDs: [String])
+            case untracked(sourceID: String)
+        }
+
+        var kind: Kind
+        var sentence: String
+    }
+
+    /// How long an undo stays on offer. Long enough to notice a mistap, short enough that the
+    /// row it is holding open does not linger.
+    static let undoWindow: Duration = .seconds(6)
+
+    private(set) var pendingUndo: UndoableAction?
+    private var undoExpiry: Task<Void, Never>?
+
+    private func offerUndo(_ action: UndoableAction) {
+        pendingUndo = action
+        undoExpiry?.cancel()
+        undoExpiry = Task { [weak self] in
+            try? await Task.sleep(for: Self.undoWindow)
+            guard !Task.isCancelled else { return }
+            await self?.expireUndo()
+        }
+    }
+
+    /// The window closed. Anything being held open for an undo is now really gone.
+    private func expireUndo() async {
+        guard let action = pendingUndo else { return }
+        pendingUndo = nil
+        if case .untracked(let sourceID) = action.kind {
+            sync.deferredUntrackIDs.remove(sourceID)
+            if let tracked = anyEvent(for: sourceID) {
+                if let plan = tracked.plan {
+                    for step in plan.steps { scheduler.cancel(step) }
+                }
+                context.delete(tracked)
+                try? context.save()
+            }
+            await scheduler.refreshWindow(context: context, settings: settings)
+        }
+    }
+
+    func dismissUndo() {
+        undoExpiry?.cancel()
+        Task { await expireUndo() }
+    }
+
+    func performUndo() async {
+        guard let action = pendingUndo else { return }
+        undoExpiry?.cancel()
+        pendingUndo = nil
+
+        switch action.kind {
+        case .tracked(let sourceIDs):
+            // Nothing is lost undoing a track: the plan is seconds old and the user made none
+            // of it.
+            for sourceID in sourceIDs {
+                await untrackImmediately(sourceID: sourceID)
+            }
+        case .untracked(let sourceID):
+            // The row was held rather than deleted, so its plan, notes and contacts are intact.
+            sync.deferredUntrackIDs.remove(sourceID)
+            settings.manuallyExcludedSourceIDs.removeAll { $0 == sourceID }
+            if !settings.manuallyIncludedSourceIDs.contains(sourceID) {
+                settings.manuallyIncludedSourceIDs.append(sourceID)
+            }
+            anyEvent(for: sourceID)?.disappearedAt = nil
+            try? context.save()
+        }
+        await scheduler.refreshWindow(context: context, settings: settings)
+    }
+
     // MARK: Tracking
 
+    /// The tracked row for a source id, excluding one that is being held open for an undo.
+    ///
+    /// Untracking now retires the row rather than deleting it, so the undo can restore its plan
+    /// and notes intact — which means "is this tracked?" has to ignore retired rows, or an event
+    /// the user just untracked would still show the amber rail.
     func trackedEvent(for sourceID: String) -> TrackedEvent? {
+        guard let row = anyEvent(for: sourceID) else { return nil }
+        return row.disappearedAt == nil ? row : nil
+    }
+
+    /// Including retired rows. Only the undo machinery wants this.
+    private func anyEvent(for sourceID: String) -> TrackedEvent? {
         var descriptor = FetchDescriptor<TrackedEvent>(predicate: #Predicate { $0.sourceID == sourceID })
         descriptor.fetchLimit = 1
         return try? context.fetch(descriptor).first
@@ -264,13 +352,67 @@ final class AppEnvironment {
         // The first plan is the moment notifications become worth asking about.
         await requestNotificationsIfNeeded()
         await scheduler.refreshWindow(context: context, settings: settings)
+        offerUndo(UndoableAction(
+            kind: .tracked(sourceIDs: [event.sourceID]),
+            sentence: "Tracking \(event.title)"
+        ))
     }
 
+    /// Tracks several events at once.
+    ///
+    /// Classification here is deliberately the **heuristic** one, even on a device where the
+    /// model is available: a model call costs seconds, and twenty of them in a row would freeze
+    /// the screen for most of a minute. The heuristic is the shippable fallback by design, and
+    /// anything it is unsure about surfaces the confirmation chip on the Plan screen — which is
+    /// a better trade than a progress bar.
+    func trackBulk(_ events: [NormalizedEvent]) async {
+        guard !events.isEmpty else { return }
+        let previousProvider = planning.currentProvider
+        planning.use(provider: HeuristicProvider())
+        defer { planning.use(provider: previousProvider) }
+
+        for event in events {
+            await sync.track(event, context: context, settings: settings)
+        }
+        await requestNotificationsIfNeeded()
+        await scheduler.refreshWindow(context: context, settings: settings)
+
+        offerUndo(UndoableAction(
+            kind: .tracked(sourceIDs: events.map(\.sourceID)),
+            sentence: events.count == 1
+                ? "Tracking \(events[0].title)"
+                : "Tracking \(events.count) events"
+        ))
+    }
+
+    /// Untracks, but holds the row open until the undo window closes — so an undo restores the
+    /// plan, the notes and the people, not just the event.
     func untrack(_ event: NormalizedEvent) async {
         if let tracked = trackedEvent(for: event.sourceID), let plan = tracked.plan {
             for step in plan.steps { scheduler.cancel(step) }
         }
-        await sync.untrack(sourceID: event.sourceID, context: context, settings: settings)
+        sync.deferredUntrackIDs.insert(event.sourceID)
+
+        settings.manuallyIncludedSourceIDs.removeAll { $0 == event.sourceID }
+        if !settings.manuallyExcludedSourceIDs.contains(event.sourceID) {
+            settings.manuallyExcludedSourceIDs.append(event.sourceID)
+        }
+        anyEvent(for: event.sourceID)?.disappearedAt = .now
+        try? context.save()
+        await scheduler.refreshWindow(context: context, settings: settings)
+
+        offerUndo(UndoableAction(
+            kind: .untracked(sourceID: event.sourceID),
+            sentence: "Stopped tracking \(event.title)"
+        ))
+    }
+
+    private func untrackImmediately(sourceID: String) async {
+        if let tracked = anyEvent(for: sourceID), let plan = tracked.plan {
+            for step in plan.steps { scheduler.cancel(step) }
+        }
+        sync.deferredUntrackIDs.remove(sourceID)
+        await sync.untrack(sourceID: sourceID, context: context, settings: settings)
     }
 
     // MARK: Step actions

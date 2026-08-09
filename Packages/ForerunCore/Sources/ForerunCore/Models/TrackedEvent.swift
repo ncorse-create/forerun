@@ -128,6 +128,27 @@ public extension TrackedEvent {
         !kindWasConfirmedByUser && (kind == .unknown || kindConfidence < Self.confidenceGate)
     }
 
+    /// The same event as the value type the sources produce. Used where an already-tracked row
+    /// has to be handed back to something that speaks in `NormalizedEvent`.
+    var normalizedForUntracking: NormalizedEvent {
+        NormalizedEvent(
+            sourceID: sourceID,
+            sourceType: sourceType,
+            title: title,
+            notes: notes,
+            startDate: startDate,
+            endDate: endDate,
+            isAllDay: isAllDay,
+            location: location,
+            calendarID: calendarID,
+            calendarName: calendarName,
+            colorHex: colorHex,
+            colorFamily: colorFamily,
+            priority: priority,
+            hasRecurrenceRules: hasRecurrenceRules
+        )
+    }
+
     /// Everything the engine needs, as a value type. Keeps the engine free of SwiftData.
     var planInput: PlanInput {
         PlanInput(

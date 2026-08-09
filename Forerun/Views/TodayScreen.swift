@@ -73,6 +73,10 @@ struct TodayScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .paperBackground()
+            .safeAreaInset(edge: .bottom) {
+                UndoBanner()
+                    .animation(.easeOut(duration: 0.2), value: app.pendingUndo)
+            }
             .navigationTitle("Today")
             .refreshable { await app.refresh() }
             .navigationDestination(for: TrackedEvent.self) { event in

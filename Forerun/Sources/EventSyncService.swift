@@ -53,6 +53,13 @@ final class EventSyncService {
 
     weak var reconciler: (any PlanReconciling)?
 
+    /// Rows the user untracked seconds ago and might still take back.
+    ///
+    /// Untracking normally deletes the row and cascades its plan, its notes and its contacts.
+    /// While an undo is on offer, the row is kept intact instead — an undo that restores the
+    /// event but not the whiteboard photo attached to it is not an undo.
+    var deferredUntrackIDs: Set<String> = []
+
     init(calendarSource: EventKitSource = EventKitSource(), tickTickSource: TickTickSource? = nil) {
         self.calendarSource = calendarSource
         self.tickTickSource = tickTickSource
@@ -186,6 +193,8 @@ final class EventSyncService {
 
             if let tracked = bySourceID[event.sourceID] {
                 if decision.reason == .manuallyExcluded {
+                    // Held rather than deleted while the undo is still on offer.
+                    guard !deferredUntrackIDs.contains(event.sourceID) else { continue }
                     context.delete(tracked)
                     bySourceID[event.sourceID] = nil
                     continue

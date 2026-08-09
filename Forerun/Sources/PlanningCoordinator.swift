@@ -31,6 +31,10 @@ final class PlanningCoordinator: PlanReconciling {
         self.provider = provider
     }
 
+    /// Exposed so a bulk operation can swap in the heuristic classifier and put the original
+    /// back afterwards.
+    var currentProvider: any IntelligenceProvider { provider }
+
     // MARK: PlanReconciling
 
     func planWasNeeded(for event: TrackedEvent) async {
