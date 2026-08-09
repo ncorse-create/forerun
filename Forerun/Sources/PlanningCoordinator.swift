@@ -190,13 +190,21 @@ final class PlanningCoordinator: PlanReconciling {
         guard let event = step.plan?.event else { return false }
         let desired = (step.snoozedUntil ?? step.fireDate).addingTimeInterval(interval)
 
+        // The event's own *other* steps count against the budget for this snooze — excluding the
+        // whole event would let a plan snooze itself past its own daily cap. Only the step being
+        // moved is left out.
+        var placement = schedulingContext(excluding: event, pinned: [])
+        placement.existingFireDates += (event.plan?.steps ?? [])
+            .filter { $0.id != step.id && $0.state.isSchedulable }
+            .map { $0.snoozedUntil ?? $0.fireDate }
+
         let placed = PrepPlanBuilder.placeSnooze(
             desired: desired,
             offsetSeconds: step.offsetSeconds,
             eventStart: event.startDate,
             isAllDay: event.isAllDay,
             settings: settings.engineSettings,
-            context: schedulingContext(excluding: event, pinned: [])
+            context: placement
         )
         guard let placed else { return false }
 
@@ -291,11 +299,17 @@ final class PlanningCoordinator: PlanReconciling {
             case .keep:
                 continue
 
-            case .retime(let id, let fireDate, let order, let templateCopy, let replaceCopy):
+            case .retime(let id, let fireDate, let order, let templateCopy, let replaceCopy, let clearSnooze):
                 guard let step = byID[id] else { continue }
                 step.fireDate = fireDate
                 step.order = order
                 step.templateCopy = templateCopy
+                if clearSnooze, step.snoozedUntil != nil {
+                    // The snooze targeted a date the event no longer has. Leaving it in place
+                    // meant the scheduler ignored everything the engine had just recomputed.
+                    step.snoozedUntil = nil
+                    if step.state == .snoozed { step.state = .pending }
+                }
                 if replaceCopy {
                     // The template moved, so any sentence generated from the old one is stale.
                     // Clearing it makes the phraser regenerate rather than leaving a sentence

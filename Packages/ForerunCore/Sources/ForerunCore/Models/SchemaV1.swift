@@ -9,7 +9,14 @@ import SwiftData
 /// Swift value types in code, so a wrong offset can be corrected in an app update without a
 /// migration.
 public enum SchemaV1: VersionedSchema {
-    public static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
+    /// Bumped as the schema was still being drafted pre-release: `PrepStep.calendarBlockIdentifier`,
+    /// `PrepPlan.droppedToCapCount` and `StepOutcome.stepID` were all added after the first
+    /// commit. All three are optional or defaulted, so SwiftData's implicit lightweight migration
+    /// covers them — but the identifier must not claim the models are unchanged.
+    ///
+    /// **Once a build ships to anyone, this stops being acceptable** and the next change is a
+    /// `SchemaV2` with a stage in `ForerunMigrationPlan`.
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 3, 0) }
 
     public static var models: [any PersistentModel.Type] {
         [
@@ -43,6 +50,15 @@ public enum ForerunMigrationPlan: SchemaMigrationPlan {
 /// present. Mirroring plus `@Attribute(.unique)` traps at launch, so that mistake would not be
 /// caught until a device build. Everything goes through here.
 public enum ForerunStore {
+    /// The one live container for this process.
+    ///
+    /// App Intents run *inside the app's process* — Siri launches the app to serve them — so an
+    /// intent that called `container()` got a second `ModelContainer` over the same SQLite file.
+    /// Two containers do not share a change-notification path, so the app's long-lived context
+    /// kept its own stale copies of anything the intent wrote and could write them back on its
+    /// next save. One shared instance removes the problem entirely.
+    public static let shared: ModelContainer? = try? container()
+
     /// The live on-disk container. No CloudKit: `cloudKitDatabase: .none` is explicit rather
     /// than implied, because adding an iCloud entitlement later would otherwise silently switch
     /// mirroring on and trap at launch against a schema with unique constraints.

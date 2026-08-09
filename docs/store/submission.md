@@ -48,7 +48,10 @@ in `project.yml` and are the single source of truth.
 | `NSCameraUsageDescription` | Forerun attaches a photo of the whiteboard to the event so the material is there when the reminder fires. Photos stay on this iPhone. |
 
 Note there is deliberately **no** `NSRemindersUsageDescription` and no photo-library string: the
-contact picker runs out of process, and the camera path is the only image source.
+contact picker runs out of process, and the camera is the only image source. `PhotoCaptureSheet`
+is camera-only (`sourceType = .camera`, no fallback) and the Photo menu item is hidden entirely
+when no camera is available — an earlier version fell back to `.photoLibrary`, which was a second
+image source with no purpose string behind it.
 
 ## Accessibility
 
@@ -132,10 +135,12 @@ Settings → Which steps you skip reports exactly this. It exists for that week.
 ## Build
 
 ```bash
+xcodegen generate           # first on a fresh clone — the .xcodeproj is gitignored
 ./scripts/build.sh          # compile check, generic iOS destination, no simulator
 ./scripts/test-core.sh      # engine tests on macOS, no simulator
-xcodegen generate           # after adding or moving any file
 ```
+
+`xcodegen generate` comes first, and again after adding or moving any file.
 
 Archive with manual signing. Cloud signing cannot issue the distribution certificate from an ASC
 API key.
@@ -147,5 +152,7 @@ API key.
 - [ ] Screenshots at both sizes
 - [ ] A week of TestFlight with real events
 - [ ] VoiceOver and AX5 passes on device
+- [ ] Decide whether the privacy policy's TickTick section ships in a credential-free 1.0 — it
+      currently describes a surface a reviewer would not be able to find
 - [ ] Decide whether 1.0 ships with TickTick credentials at all — a credential-free 1.0 is
       complete, hides the surface entirely, and needs no OAuth disclosure

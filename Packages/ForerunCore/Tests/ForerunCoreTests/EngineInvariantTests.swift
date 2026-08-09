@@ -797,7 +797,7 @@ struct PlanRegeneratorTests {
         #expect(result.preservedCount == 1)
 
         let action = result.actions.compactMap { action -> (Date, Bool)? in
-            if case .retime(let id, let fireDate, _, _, let replaceCopy) = action,
+            if case .retime(let id, let fireDate, _, _, let replaceCopy, _) = action,
                id == "volunteerTeamEvent.d-7.leaders" {
                 return (fireDate, replaceCopy)
             }
@@ -828,7 +828,7 @@ struct PlanRegeneratorTests {
 
         let result = PlanRegenerator.merge(existing: existing, draft: moved)
         let retimed = result.actions.compactMap { action -> Date? in
-            if case .retime(_, let fireDate, _, _, _) = action { return fireDate }
+            if case .retime(_, let fireDate, _, _, _, _) = action { return fireDate }
             return nil
         }.first
         #expect(retimed == pinnedStep.fireDate)
@@ -890,13 +890,111 @@ struct PlanRegeneratorTests {
         #expect(result.removedCount == 1)
     }
 
-    @Test("A user-owned rung that the new plan dropped is kept anyway")
-    func userOwnedOrphansSurvive() {
+    @Test("A rebuild clears a stale snooze rather than letting it override the new date")
+    func rebuildClearsTheSnooze() {
+        let original = draft()
+        guard let step = original.step("volunteerTeamEvent.d-7.leaders") else {
+            Issue.record("fixture missing")
+            return
+        }
+        let existing = [ExistingStep(
+            playbookStepID: step.playbookStepID,
+            fireDate: step.fireDate,
+            state: .snoozed
+        )]
+        let result = PlanRegenerator.merge(existing: existing, draft: draft(daysOut: 37))
+
+        let clears = result.actions.compactMap { action -> Bool? in
+            if case .retime(_, _, _, _, _, let clearSnooze) = action { return clearSnooze }
+            return nil
+        }.first
+        // Otherwise the scheduler fires on `snoozedUntil` while the engine budgeted for the
+        // recomputed `fireDate` — the step can land after its own event, inside quiet hours,
+        // and uncounted against the daily cap, all at once.
+        #expect(clears == true)
+    }
+
+    @Test("A pinned step keeps its snooze, because its time is the user's decision")
+    func pinnedStepsKeepTheirSnooze() {
+        let original = draft()
+        guard let step = original.step("volunteerTeamEvent.d-7.leaders") else { return }
+        let existing = [ExistingStep(
+            playbookStepID: step.playbookStepID,
+            fireDate: step.fireDate,
+            state: .snoozed,
+            userPinnedTime: true
+        )]
+        let result = PlanRegenerator.merge(existing: existing, draft: draft(daysOut: 37))
+        let clears = result.actions.compactMap { action -> Bool? in
+            if case .retime(_, _, _, _, _, let clearSnooze) = action { return clearSnooze }
+            return nil
+        }.first
+        #expect(clears == false)
+    }
+
+    @Test("Rewording a step does not make it immune to the per-event cap")
+    func editedCopyDoesNotEscapeTheCap() {
+        var full = EngineSettings.default
+        full.maxStepsPerEvent = 8
+        let wide = PrepPlanBuilder.build(
+            input: input(start: now.addingTimeInterval(45 * 86_400)),
+            settings: full,
+            context: context()
+        )
+        let existing = wide.steps.map {
+            ExistingStep(
+                playbookStepID: $0.playbookStepID,
+                fireDate: $0.fireDate,
+                state: .pending,
+                hasUserEditedCopy: $0.playbookStepID == "volunteerTeamEvent.d-3.leaders"
+            )
+        }
+
+        var tight = EngineSettings.default
+        tight.maxStepsPerEvent = 3
+        let capped = PrepPlanBuilder.build(
+            input: input(start: now.addingTimeInterval(45 * 86_400)),
+            settings: tight,
+            context: context()
+        )
+        let result = PlanRegenerator.merge(existing: existing, draft: capped)
+
+        let surviving = existing.count - result.removedCount
+        #expect(surviving <= tight.maxStepsPerEvent,
+                "\(surviving) steps survive a cap of \(tight.maxStepsPerEvent)" as Comment)
+    }
+
+    @Test("A reworded rung the new plan dropped is removed, not kept")
+    func rewordedOrphansDoNotSurvive() {
+        // This asserted the opposite until the QA pass showed what it cost: `isUserOwned`
+        // includes `hasUserEditedCopy`, so merely rewording a sentence made a step immune to the
+        // per-event cap — a path straight past locked decision 3, which calls the cap hard and
+        // unraisable. Invariant 8 exempts `userPinnedTime`, and nothing else.
         let existing = [ExistingStep(
             playbookStepID: "volunteerTeamEvent.d-3.leaders",
             fireDate: now.addingTimeInterval(86_400),
             state: .pending,
             hasUserEditedCopy: true
+        )]
+        var settings = EngineSettings.default
+        settings.maxStepsPerEvent = 5
+        let capped = PrepPlanBuilder.build(
+            input: input(start: now.addingTimeInterval(45 * 86_400)),
+            settings: settings,
+            context: context()
+        )
+        let result = PlanRegenerator.merge(existing: existing, draft: capped)
+        #expect(result.removedCount == 1)
+        #expect(result.preservedCount == 0)
+    }
+
+    @Test("A pinned rung the new plan dropped is kept, because a pin is a deliberate placement")
+    func pinnedOrphansSurvive() {
+        let existing = [ExistingStep(
+            playbookStepID: "volunteerTeamEvent.d-3.leaders",
+            fireDate: now.addingTimeInterval(86_400),
+            state: .pending,
+            userPinnedTime: true
         )]
         var settings = EngineSettings.default
         settings.maxStepsPerEvent = 5

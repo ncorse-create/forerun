@@ -36,6 +36,9 @@ struct EventPeopleSection: View {
                     Text("Add")
                         .font(TypeRamp.micro())
                         .foregroundStyle(Palette.amber)
+                        .padding(.vertical, 10)
+                        .padding(.leading, 12)
+                        .contentShape(.rect)
                 }
             }
 
@@ -184,13 +187,18 @@ struct ScratchpadSection: View {
                         draftURL = ""
                         isAddingLink = true
                     }
-                    Button("Photo", systemImage: "camera") {
-                        photoItem = PhotosPickerItemBox()
+                    if PhotoCaptureSheet.isAvailable {
+                        Button("Photo", systemImage: "camera") {
+                            photoItem = PhotosPickerItemBox()
+                        }
                     }
                 } label: {
                     Text("Add")
                         .font(TypeRamp.micro())
                         .foregroundStyle(Palette.amber)
+                        .padding(.vertical, 10)
+                        .padding(.leading, 12)
+                        .contentShape(.rect)
                 }
             }
 
@@ -261,9 +269,11 @@ private struct ScratchpadRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 13))
+                .font(TypeRamp.caption())
+                .imageScale(.small)
                 .foregroundStyle(Palette.muted)
                 .frame(width: 16)
+                .accessibilityHidden(true)
 
             Button {
                 if item.kind == .link, let url = item.url {
@@ -333,13 +343,18 @@ struct PhotoCaptureSheet: UIViewControllerRepresentable {
     let onCaptured: (Data) -> Void
     @Environment(\.dismiss) private var dismiss
 
+    /// Whether the camera is available at all. Checked before presenting, because the picker is
+    /// camera-only and there is nothing to show without one.
+    static var isAvailable: Bool {
+        UIImagePickerController.isSourceTypeAvailable(.camera)
+    }
+
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
-        // The camera is the point — a whiteboard photo is taken, not found. The library is the
-        // fallback on a device with no camera.
-        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera)
-            ? .camera
-            : .photoLibrary
+        // Camera only, deliberately. A whiteboard photo is taken, not found — and a photo-library
+        // fallback would be a second image source needing `NSPhotoLibraryUsageDescription`, which
+        // this app does not declare precisely because it does not read the library.
+        picker.sourceType = .camera
         picker.delegate = context.coordinator
         return picker
     }

@@ -28,8 +28,9 @@ No proxy. The sprint ships, but with three constraints that keep it honest.
 1. **The secret is public and is designed for.** `strings` on a decrypted IPA recovers it and a
    proxied capture yields it in one run. Obfuscation buys minutes. The security posture assumes
    it is already published.
-2. **Credentials are not in the repository.** `TickTickCredentials.swift` is gitignored and
-   absent from a fresh clone. `TickTickSource.isConfigured` returns `false` when it is missing,
+2. **Credentials are not in the repository.** `Forerun/Resources/TickTickCredentials.json` is
+   gitignored and absent from a fresh clone. `TickTickSource.isConfigured` returns `false` when
+   it is missing,
    and **the entire TickTick surface — the Settings row, the red rule, the connect flow —
    is hidden, not disabled.** A build with no credentials is a complete, shippable,
    EventKit-only app with no dead UI in it. This is what lets the sprint be built and reviewed
@@ -72,14 +73,27 @@ already tells us to treat as public.
 Not blockers for the build — blockers for turning it on.
 
 1. Register the app at `developer.ticktick.com/manage`; capture `client_id` and `client_secret`
-   into `Forerun/Sources/TickTickCredentials.swift` (gitignored).
+   into `Forerun/Resources/TickTickCredentials.json` (gitignored):
+
+   ```json
+   { "clientID": "…", "clientSecret": "…", "redirectURI": "https://persue.app/forerun/oauth" }
+   ```
+
+   A **JSON resource, not a Swift file.** The first attempt at this was a stub `enum
+   TickTickSecrets` in committed source that a gitignored `TickTickCredentials.swift` was meant
+   to override. Swift has no such mechanism — adding the file produces `invalid redeclaration of
+   'TickTickSecrets'`, so following this procedure literally would not have compiled. Reading a
+   resource at runtime removes the compile-time coupling entirely.
 2. In the same sitting, run the 30-minute empirical test: attempt `/oauth/token` **with**
    `code_challenge`/`code_verifier` and **no** `client_secret`. If it succeeds, the unverified
    `ticktick-cli` claim is real, there is a proper public-client flow, and the embedded secret
    can be deleted outright. If it 401s, this ADR stands unchanged.
-3. Register the https redirect URI and host an `apple-app-site-association` file for it. A
-   static host is sufficient and correct — it serves a file, runs no logic, and never sees the
-   code.
+3. Register the https redirect URI with TickTick.
+
+   An `apple-app-site-association` file is **not** required.
+   `ASWebAuthenticationSession.Callback.https(host:path:)` intercepts the redirect in-process
+   before any network request and does not consult AASA — which is exactly why the code never
+   reaches a server. An earlier draft of this ADR asked for one; it was unnecessary.
 4. Confirm all-day `dueDate` semantics against a real all-day task.
 
 ## Consequences

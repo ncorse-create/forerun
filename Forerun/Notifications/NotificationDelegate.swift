@@ -98,9 +98,26 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    func resolve(
+        _ step: PrepStep,
+        as state: StepState,
+        fromNotification: Bool,
+        context: ModelContext
+    ) {
+        StepResolution.resolve(step, as: state, fromNotification: fromNotification, context: context)
+    }
+}
+
+/// Resolving a step, in one place.
+///
+/// The notification actions, the in-app swipes and the App Intent all go through here, so the
+/// `!isResolved` guard, the custom-step exclusion and the outcome write cannot drift apart. The
+/// intent used to carry its own copy without the guard.
+@MainActor
+enum StepResolution {
     /// Records the outcome alongside the state change. `StepOutcome` has no relationship to the
     /// event, so it survives the event being deleted — the diagnostic is about the playbook rung.
-    func resolve(
+    static func resolve(
         _ step: PrepStep,
         as state: StepState,
         fromNotification: Bool,
@@ -112,14 +129,14 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         // Custom steps have no playbook rung, so there is nothing about the *playbook* to learn
         // from them and they are not recorded.
         guard !step.isCustom else { return }
-        let kind = step.plan?.event?.kind ?? .unknown
         context.insert(StepOutcome(
             playbookStepID: step.playbookStepID,
-            kind: kind,
+            kind: step.plan?.event?.kind ?? .unknown,
             audience: step.audience,
             offsetSeconds: step.offsetSeconds,
             state: state,
-            fromNotification: fromNotification
+            fromNotification: fromNotification,
+            stepID: step.id
         ))
     }
 }

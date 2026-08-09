@@ -15,6 +15,7 @@ struct SettingsScreen: View {
     @State private var isConfirmingDelete = false
     @State private var deleteConfirmationText = ""
     @State private var isDisconnectingTickTick = false
+    @State private var exportFailed = false
 
     private var settings: AppSettings { app.settings }
 
@@ -42,12 +43,20 @@ struct SettingsScreen: View {
             .sheet(item: $exportedFile) { file in
                 ShareTextSheet(text: file.text, title: "Forerun export")
             }
+            .alert("Couldn't export", isPresented: $exportFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Forerun couldn't read its own library just now. Try again in a moment.")
+            }
             .alert("Delete everything?", isPresented: $isConfirmingDelete) {
                 TextField("Type DELETE", text: $deleteConfirmationText)
                     .textInputAutocapitalization(.characters)
                 Button("Delete", role: .destructive) {
-                    guard deleteConfirmationText.uppercased() == "DELETE" else { return }
+                    // Reset first: returning before this left the wrong text in the field for
+                    // the next attempt.
+                    let confirmed = deleteConfirmationText.uppercased() == "DELETE"
                     deleteConfirmationText = ""
+                    guard confirmed else { return }
                     Task {
                         await app.deleteAllData()
                         dismiss()
@@ -88,12 +97,22 @@ struct SettingsScreen: View {
                 ),
                 in: AppSettings.minStepsFloor...AppSettings.maxStepsCeiling
             )
+            LabeledContent("Notifications", value: app.notificationStatusLabel)
+            if app.notificationsAreBlocked {
+                Button("Turn notifications on") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+            }
         } header: {
             Text("Reminders")
         } footer: {
-            Text("Eight a day is the ceiling, on purpose. Past that, reminders stop being "
-                 + "reminders — you start swiping them away without reading them, and the ones "
-                 + "that matter go with the rest.")
+            if app.notificationsAreBlocked {
+                Text("Notifications are off, so none of these limits mean anything yet — nothing "
+                     + "can reach you until you turn them back on.")
+            } else {
+                Text("Eight a day is the ceiling, on purpose. Past that, the reminders that "
+                     + "matter get lost in the ones that don't.")
+            }
         }
     }
 
@@ -174,6 +193,11 @@ struct SettingsScreen: View {
                 LabeledContent("What to track", value: trackingSummary)
             }
             LabeledContent("Apple Calendar", value: calendarStatus)
+            if app.calendarAccessError == .denied || app.calendarAccessError == .writeOnlyAccess {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+            }
         }
     }
 
@@ -276,6 +300,8 @@ struct SettingsScreen: View {
             Button("Export everything") {
                 if let data = app.exportJSON(), let text = String(data: data, encoding: .utf8) {
                     exportedFile = ExportedFile(text: text)
+                } else {
+                    exportFailed = true
                 }
             }
             Button("Delete all data", role: .destructive) {
@@ -395,15 +421,17 @@ struct SkipRateScreen: View {
         guard !row.playbookStepID.hasPrefix("custom.") else { return "A step you added" }
         let playbook = PlaybookLibrary.playbook(for: row.kind)
         let step = playbook.steps.first { $0.id == row.playbookStepID }
+        // Never fall back to the raw identifier — a renamed or retired rung would otherwise show
+        // the user something like "volunteerTeamEvent.d-21.leaders".
         return step?.template.replacingOccurrences(of: "{title}", with: "an event")
-            ?? row.playbookStepID
+            ?? "A step Forerun no longer plans"
     }
 
     /// Phrased as a fact about the step, never as a judgement about the person.
     private func sentence(for row: SkipRateRow) -> String {
         if row.isNoteworthy {
-            return "Skipped \(row.skippedCount) of \(row.total) times. That usually means the "
-                + "timing is wrong, not that the step is."
+            return "Skipped \(row.skippedCount) of \(row.total) times. That usually points at "
+                + "the timing rather than the step itself."
         }
         return "Skipped \(row.skippedCount) of \(row.total) times."
     }

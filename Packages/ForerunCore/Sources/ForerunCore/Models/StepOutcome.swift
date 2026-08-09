@@ -22,6 +22,10 @@ public final class StepOutcome {
     /// True when the step was resolved from a notification action rather than in the app. Useful
     /// for telling "I ignored this" apart from "I dealt with it somewhere else."
     public var fromNotification: Bool
+    /// The step this came from, as a bare identifier rather than a relationship — reopening a
+    /// step needs to remove exactly this row, but an outcome must still outlive the event it
+    /// belonged to, so it cannot be a `@Relationship`.
+    public var stepID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -31,7 +35,8 @@ public final class StepOutcome {
         offsetSeconds: TimeInterval,
         state: StepState,
         decidedAt: Date = .now,
-        fromNotification: Bool = false
+        fromNotification: Bool = false,
+        stepID: UUID? = nil
     ) {
         self.id = id
         self.playbookStepID = playbookStepID
@@ -41,6 +46,7 @@ public final class StepOutcome {
         self.stateRaw = state.rawValue
         self.decidedAt = decidedAt
         self.fromNotification = fromNotification
+        self.stepID = stepID
     }
 }
 
@@ -72,6 +78,17 @@ public extension StepOutcome {
         guard let stale = try? context.fetch(descriptor), !stale.isEmpty else { return 0 }
         for outcome in stale { context.delete(outcome) }
         return stale.count
+    }
+
+    /// Removes the outcome recorded for one step, so reopening it does not leave a phantom
+    /// resolution behind in the diagnostic.
+    @MainActor
+    static func removeOutcome(forStepID stepID: UUID, in context: ModelContext) {
+        let descriptor = FetchDescriptor<StepOutcome>(
+            predicate: #Predicate { $0.stepID == stepID }
+        )
+        guard let matches = try? context.fetch(descriptor) else { return }
+        for outcome in matches { context.delete(outcome) }
     }
 
     /// Removes every outcome belonging to one playbook rung. This is what "delete all my data"

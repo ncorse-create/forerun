@@ -14,17 +14,34 @@ struct TodayScreen: View {
 
     @State private var snoozeFailureMessage: String?
 
-    /// Steps whose moment has arrived: due today, or overdue and still unresolved. Overdue ones
-    /// are included deliberately — a step you did not act on yesterday has not stopped mattering.
+    /// How far back an unresolved step keeps appearing in Now.
+    ///
+    /// A step you did not act on yesterday has not stopped mattering — but without a floor,
+    /// every unresolved step from every event of the past month sat in Now permanently, and the
+    /// only way to clear it was to swipe each one. That is a clearing ritual on the home screen,
+    /// which is exactly what locked decision 5 forbids. Three days keeps "yesterday" while
+    /// letting genuinely stale work fall away on its own.
+    static let overdueGraceDays = 3
+
+    /// Steps whose moment has arrived: due today, or overdue within the grace window.
     private var dueNow: [PrepStep] {
-        let endOfToday = Calendar.current.startOfDay(for: .now).addingTimeInterval(86_400)
+        let calendar = Calendar.current
+        let endOfToday = calendar.startOfDay(for: .now).addingTimeInterval(86_400)
+        let floor = calendar.date(byAdding: .day, value: -Self.overdueGraceDays, to: .now) ?? .distantPast
+
         return trackedEvents
             .filter { $0.disappearedAt == nil && !$0.isDuplicate }
             .compactMap(\.plan)
             .flatMap(\.steps)
             .filter { step in
                 guard step.state.isSchedulable || step.state == .fired else { return false }
-                return (step.snoozedUntil ?? step.fireDate) < endOfToday
+                let fireDate = step.snoozedUntil ?? step.fireDate
+                guard fireDate < endOfToday, fireDate >= floor else { return false }
+                // A pre-event step for something that has already happened is noise, not work.
+                if let event = step.plan?.event, step.offsetSeconds < 0, event.startDate < .now {
+                    return false
+                }
+                return true
             }
             .sorted { ($0.snoozedUntil ?? $0.fireDate) < ($1.snoozedUntil ?? $1.fireDate) }
     }
@@ -47,7 +64,7 @@ struct TodayScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if dueNow.isEmpty && ahead.isEmpty {
+                if dueNow.isEmpty && ahead.isEmpty && !app.notificationsAreBlocked {
                     EmptyStateSentence(sentence: "Nothing needs you today.")
                         .frame(maxHeight: .infinity)
                 } else {
@@ -85,6 +102,13 @@ struct TodayScreen: View {
 
     private var list: some View {
         List {
+            if app.notificationsAreBlocked {
+                NotificationsOffBanner()
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+
             if !dueNow.isEmpty {
                 Section {
                     ForEach(dueNow) { step in
@@ -152,6 +176,36 @@ struct TodayScreen: View {
                 .tint(Palette.amber)
             }
         }
+    }
+}
+
+/// Reminders cannot arrive. Said once, plainly, on the screen that would otherwise look normal.
+private struct NotificationsOffBanner: View {
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Reminders are turned off")
+                .font(TypeRamp.bodyEmphasis())
+                .foregroundStyle(Palette.ink)
+            Text("Forerun can still plan the run-up, but nothing will reach you until you turn "
+                 + "notifications back on.")
+                .font(TypeRamp.caption())
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }
+            .font(TypeRamp.micro())
+            .foregroundStyle(Palette.amber)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Palette.paperSunk, in: .rect(cornerRadius: 10))
+        .padding(.horizontal, Metrics.hMargin)
+        .padding(.top, 16)
+        .accessibilityElement(children: .combine)
     }
 }
 

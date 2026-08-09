@@ -189,8 +189,12 @@ final class NotificationScheduler {
         // at 02:00 when the transition lands, so the correction only arrives on the next
         // foreground, possibly after the mis-timed notification has already gone out.
         let target = max(entry.effectiveFireDate, now.addingTimeInterval(1))
+        // `.second` is included deliberately. Dropping it floors the trigger to the top of the
+        // minute, so a step due later in the *current* minute produced components that had
+        // already elapsed — and a non-repeating calendar trigger whose date has passed never
+        // delivers at all.
         let components = Calendar.current.dateComponents(
-            [.year, .month, .day, .hour, .minute], from: target
+            [.year, .month, .day, .hour, .minute, .second], from: target
         )
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         return UNNotificationRequest(
@@ -209,6 +213,9 @@ final class NotificationScheduler {
 
     func cancelAll() {
         center.removeAllPendingNotificationRequests()
+        // Delivered banners too. "Delete all data" leaving Forerun notifications sitting in
+        // Notification Center is not "everything removed."
+        center.removeAllDeliveredNotifications()
         pendingCount = 0
         truncatedStepCount = 0
     }

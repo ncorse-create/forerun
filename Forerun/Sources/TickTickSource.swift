@@ -7,17 +7,17 @@ import Foundation
 /// the secret is embedded and **treated as public** — see `docs/decisions/002-ticktick.md` for
 /// why a token-exchange proxy would be worse rather than better.
 ///
-/// The real values live in `TickTickCredentials.swift`, which is gitignored and absent from a
-/// fresh clone. When it is absent, `isConfigured` is false and the entire TickTick surface is
-/// **hidden** rather than disabled: a credential-free build is a complete, shippable,
+/// The real values live in `Forerun/Resources/TickTickCredentials.json`, which is gitignored and
+/// absent from a fresh clone. When it is absent, `isConfigured` is false and the entire TickTick
+/// surface is **hidden** rather than disabled: a credential-free build is a complete, shippable,
 /// EventKit-only app with no dead UI in it.
 enum TickTickConfiguration {
-    static var clientID: String? { TickTickSecrets.clientID }
-    static var clientSecret: String? { TickTickSecrets.clientSecret }
+    static var clientID: String? { TickTickSecrets.loaded?.clientID }
+    static var clientSecret: String? { TickTickSecrets.loaded?.clientSecret }
 
     /// An https Universal Link, not a custom scheme. `ASWebAuthenticationSession` intercepts it
     /// before any network request, so the authorization code never reaches a server.
-    static var redirectURI: String? { TickTickSecrets.redirectURI }
+    static var redirectURI: String? { TickTickSecrets.loaded?.redirectURI }
 
     static var isConfigured: Bool {
         guard let clientID, let clientSecret, let redirectURI else { return false }
@@ -34,12 +34,38 @@ enum TickTickConfiguration {
     static let scope = "tasks:read"
 }
 
-/// Overridden by the gitignored `TickTickCredentials.swift`. Absent credentials are the
-/// committed default, deliberately.
+/// Credentials, read at runtime from a gitignored resource.
+///
+/// This used to be a stub `enum` in this file that a gitignored `TickTickCredentials.swift` was
+/// supposed to "override." Swift has no such mechanism — adding the second file produced
+/// `invalid redeclaration of 'TickTickSecrets'`, so the documented ship procedure did not
+/// compile. Reading a JSON resource removes the compile-time coupling entirely: the credential
+/// -free build has no file and no reference to one, and adding the file changes no source.
+///
+/// Create `Forerun/Resources/TickTickCredentials.json` (gitignored):
+/// ```json
+/// { "clientID": "…", "clientSecret": "…", "redirectURI": "https://…/oauth" }
+/// ```
 enum TickTickSecrets {
-    static let clientID: String? = nil
-    static let clientSecret: String? = nil
-    static let redirectURI: String? = nil
+    struct Values: Decodable, Sendable {
+        let clientID: String
+        let clientSecret: String
+        let redirectURI: String
+    }
+
+    static let resourceName = "TickTickCredentials"
+
+    /// Resolved once. A missing file is the normal, committed state and is not an error.
+    static let loaded: Values? = {
+        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let values = try? JSONDecoder().decode(Values.self, from: data),
+              !values.clientID.isEmpty,
+              !values.clientSecret.isEmpty,
+              !values.redirectURI.isEmpty
+        else { return nil }
+        return values
+    }()
 }
 
 /// How the user's TickTick setup maps onto "red."

@@ -71,6 +71,9 @@ public enum TypeRamp {
     /// Monospaced, for the one place raw diagnostic text is shown.
     public static func diagnostic() -> Font { .system(.caption, design: .monospaced) }
 
+    /// Monospaced at body size, for the shareable plain-text plan — its alignment is the point.
+    public static func monoBody() -> Font { .system(.body, design: .monospaced) }
+
     public static func body() -> Font { .system(.body) }
     public static func bodyEmphasis() -> Font { .system(.body, weight: .medium) }
     public static func caption() -> Font { .system(.subheadline) }

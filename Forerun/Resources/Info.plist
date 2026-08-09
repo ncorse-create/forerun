@@ -22,17 +22,6 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.persueapps.forerun</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>forerun</string>
-			</array>
-		</dict>
-	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
@@ -45,10 +34,6 @@
 	<string>Forerun attaches a photo of the whiteboard to the event so the material is there when the reminder fires. Photos stay on this iPhone.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Forerun uses the people you pick to pre-fill a message to your team leads. It stores only their name and a reference, never their full contact card.</string>
-	<key>NSUserActivityTypes</key>
-	<array>
-		<string>ForerunOpenPlanIntent</string>
-	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

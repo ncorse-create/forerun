@@ -120,7 +120,9 @@ private struct ConnectPage: View {
                     .font(TypeRamp.caption())
                     .foregroundStyle(Palette.clay)
             } else if isConnected {
-                Text("Connected. \(app.availableCalendars.count) calendars found.")
+                Text(app.availableCalendars.count == 1
+                     ? "Connected. 1 calendar found."
+                     : "Connected. \(app.availableCalendars.count) calendars found.")
                     .font(TypeRamp.caption())
                     .foregroundStyle(Palette.muted)
             }

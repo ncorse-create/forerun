@@ -21,8 +21,8 @@ public enum PrepPlanBuilder {
     private static let busyWindowClearance: TimeInterval = 5 * 60
 
     /// Bounded because the passes feed each other — dropping a step for audience ordering can
-    /// free a budget slot, which can move another step, which can break the gap rule. Four
-    /// rounds is far more than any real plan needs; it exists so a pathological input cannot spin.
+    /// free a budget slot, which can move another step, which can break the gap rule. Six rounds
+    /// is far more than any real plan needs; it exists so a pathological input cannot spin.
     private static let maxSettlingRounds = 6
 
     // MARK: - Entry point

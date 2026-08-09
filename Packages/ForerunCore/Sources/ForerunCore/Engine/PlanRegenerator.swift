@@ -37,8 +37,17 @@ public enum StepMergeAction: Sendable, Equatable {
     /// Left exactly as it is — a custom step, a resolved step, or a pinned one.
     case keep(playbookStepID: String)
     /// Same step, new fire date and position. Copy is only replaced when the user never wrote
-    /// their own.
-    case retime(playbookStepID: String, fireDate: Date, order: Int, templateCopy: String, replaceCopy: Bool)
+    /// their own, and `clearSnooze` says whether the step's snooze target must be discarded —
+    /// a recomputed fire date that a stale `snoozedUntil` then overrides is not a recomputation
+    /// at all.
+    case retime(
+        playbookStepID: String,
+        fireDate: Date,
+        order: Int,
+        templateCopy: String,
+        replaceCopy: Bool,
+        clearSnooze: Bool
+    )
     /// A rung the previous plan did not have.
     case insert(StepDraft)
     /// A rung the new plan does not have, that nobody has touched.
@@ -119,8 +128,18 @@ public enum PlanRegenerator {
             }
 
             guard let rebuilt = draftByID[step.playbookStepID] else {
-                // The rung is gone from the new plan. Only drop it if nobody owns it.
-                if step.isUserOwned {
+                // The rung is gone from the new plan.
+                //
+                // Only a *deliberate placement* survives that — a pinned time or a step the user
+                // wrote themselves. A merely reworded rung does not: `isUserOwned` includes
+                // `hasUserEditedCopy`, and keeping on that basis meant rewording a sentence made
+                // a step immune to the per-event cap, which locked decision 3 calls hard and
+                // unraisable. Invariant 8 exempts `userPinnedTime` and nothing else.
+                //
+                // Losing the wording is the right trade here, because the usual way a rung
+                // vanishes is the user lowering the cap — which *is* an instruction to have
+                // fewer steps.
+                if step.userPinnedTime || step.isCustom {
                     actions.append(.keep(playbookStepID: step.playbookStepID))
                     preserved += 1
                 } else {
@@ -137,7 +156,12 @@ public enum PlanRegenerator {
                 fireDate: fireDate,
                 order: rebuilt.order,
                 templateCopy: rebuilt.templateCopy,
-                replaceCopy: !step.hasUserEditedCopy
+                replaceCopy: !step.hasUserEditedCopy,
+                // A snooze is a decision about a date that no longer exists. Keeping it meant
+                // the scheduler fired on `snoozedUntil` while the engine had budgeted for the
+                // recomputed `fireDate` — so the step could land after its own event, inside
+                // quiet hours, and uncounted against the daily cap, all at once.
+                clearSnooze: !step.userPinnedTime
             ))
             if step.isUserOwned { preserved += 1 }
         }

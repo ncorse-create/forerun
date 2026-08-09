@@ -61,11 +61,6 @@ targets:
         NSCalendarsWriteOnlyAccessUsageDescription: "Forerun can block the working hours for a deep-work event on your calendar when you ask it to."
         NSContactsUsageDescription: "Forerun uses the people you pick to pre-fill a message to your team leads. It stores only their name and a reference, never their full contact card."
         NSCameraUsageDescription: "Forerun attaches a photo of the whiteboard to the event so the material is there when the reminder fires. Photos stay on this iPhone."
-        CFBundleURLTypes:
-          - CFBundleURLName: com.persueapps.forerun
-            CFBundleURLSchemes: [forerun]
-        NSUserActivityTypes:
-          - ForerunOpenPlanIntent
 
   ForerunTests:
     type: bundle.unit-test

@@ -120,7 +120,8 @@ final class EventSyncService {
             context: context,
             settings: settings,
             now: now,
-            fetchStart: start
+            fetchStart: start,
+            fetchEnd: end
         )
 
         // One housekeeping pass, in the one place that already walks the store.
@@ -140,7 +141,8 @@ final class EventSyncService {
         context: ModelContext,
         settings: AppSettings,
         now: Date,
-        fetchStart: Date
+        fetchStart: Date,
+        fetchEnd: Date
     ) async {
         let rules = TrackingSettings(
             trackedCalendarIDs: Set(settings.trackedCalendarIDs),
@@ -151,7 +153,8 @@ final class EventSyncService {
 
         let existing = collapseDuplicateRows(
             (try? context.fetch(FetchDescriptor<TrackedEvent>())) ?? [],
-            context: context
+            context: context,
+            now: now
         )
         var bySourceID = Dictionary(existing.map { ($0.sourceID, $0) }, uniquingKeysWith: { first, _ in first })
         var seenSourceIDs: Set<String> = []
@@ -165,7 +168,13 @@ final class EventSyncService {
             // minutes in Calendar" a reschedule rather than a delete-and-recreate that takes the
             // plan, the edited sentences, the scratchpad and the contacts with it.
             if bySourceID[event.sourceID] == nil,
-               let moved = rekeyMovedOccurrence(event, among: bySourceID, seen: seenSourceIDs) {
+               let moved = rekeyMovedOccurrence(
+                   event,
+                   among: bySourceID,
+                   seen: seenSourceIDs,
+                   fetchStart: fetchStart,
+                   fetchEnd: fetchEnd
+               ) {
                 let previousStart = moved.startDate
                 bySourceID[moved.sourceID] = nil
                 moved.sourceID = event.sourceID
@@ -232,33 +241,51 @@ final class EventSyncService {
         )
     }
 
+    /// How far an occurrence may have moved and still be recognised as the same one.
+    ///
+    /// An event someone dragged in Calendar moved by hours, or a day. Two days is generous for
+    /// that and still comfortably inside a daily series' spacing, which is the tightest case.
+    static let moveTolerance: TimeInterval = 2 * 86_400
+
     /// Finds the tracked row that this event *is*, after a time change moved its composite id.
     ///
-    /// The match is deliberately narrow — same series identifier, same source, not already
-    /// claimed by another event in this batch, and the nearest such candidate wins. A recurring
-    /// series has many occurrences sharing one series identifier, so a loose match would happily
-    /// rekey next month's Sunday service onto this week's.
+    /// Deliberately conservative, because getting this wrong is worse than not matching at all.
+    /// An earlier version took the *nearest unseen row of the same series* with no distance
+    /// limit, which meant that on a weekly series every sync handed a just-finished occurrence's
+    /// row — its plan, its resolved rungs, its whiteboard photo, its contacts — to an occurrence
+    /// two months out, silently, forever. The finished occurrence vanished and the future one
+    /// inherited steps already marked done, so it would never notify for them.
+    ///
+    /// Four conditions now, all required:
+    /// - same series identifier and same source;
+    /// - the candidate's own occurrence is inside the window this fetch actually covered, so a
+    ///   row that is simply out of range is never mistaken for a missing one;
+    /// - the candidate is within `moveTolerance` of the incoming occurrence;
+    /// - and **exactly one** candidate qualifies. Two means the match is ambiguous, and an
+    ///   ambiguous rekey is how a whole series gets shuffled.
     private func rekeyMovedOccurrence(
         _ event: NormalizedEvent,
         among tracked: [String: TrackedEvent],
-        seen: Set<String>
+        seen: Set<String>,
+        fetchStart: Date,
+        fetchEnd: Date
     ) -> TrackedEvent? {
         guard event.sourceType == .eventkit else { return nil }
         let series = EventKitSource.seriesIdentifier(from: event.sourceID)
         guard !series.isEmpty else { return nil }
 
         let candidates = tracked.values.filter { candidate in
-            candidate.sourceType == .eventkit
-                && EventKitSource.seriesIdentifier(from: candidate.sourceID) == series
-                // A row the current batch already matched exactly is not a move — it is itself.
-                && !seen.contains(candidate.sourceID)
+            guard candidate.sourceType == .eventkit else { return false }
+            guard EventKitSource.seriesIdentifier(from: candidate.sourceID) == series else { return false }
+            // A row this batch already matched exactly is not a move — it is itself.
+            guard !seen.contains(candidate.sourceID) else { return false }
+            // Only a row that *should* have been in this fetch can be judged missing.
+            guard candidate.startDate >= fetchStart, candidate.startDate <= fetchEnd else { return false }
+            return abs(candidate.startDate.timeIntervalSince(event.startDate)) <= Self.moveTolerance
         }
-        guard !candidates.isEmpty else { return nil }
-
-        return candidates.min {
-            abs($0.startDate.timeIntervalSince(event.startDate))
-                < abs($1.startDate.timeIntervalSince(event.startDate))
-        }
+        // Exactly one, or nothing. A tie is unresolvable and must not be guessed.
+        guard candidates.count == 1 else { return nil }
+        return candidates.first
     }
 
     /// `sourceID` is the natural key but carries no unique constraint — SwiftData's uniqueness
@@ -268,7 +295,8 @@ final class EventSyncService {
     /// downstream can schedule two sets of notifications for one event.
     private func collapseDuplicateRows(
         _ events: [TrackedEvent],
-        context: ModelContext
+        context: ModelContext,
+        now: Date
     ) -> [TrackedEvent] {
         var bySourceID: [String: TrackedEvent] = [:]
         var survivors: [TrackedEvent] = []
@@ -282,13 +310,19 @@ final class EventSyncService {
             // Prefer whichever row a human has actually touched.
             let incumbentWeight = weight(of: incumbent)
             let challengerWeight = weight(of: event)
+            // The loser is retired rather than deleted. Deleting cascaded its plan, its edited
+            // sentences, its scratchpad and its contacts with no warning and no undo — and when
+            // both rows carried edits, one set went silently. Marking it disappeared keeps it out
+            // of every query while leaving the 14-day grace window to recover it.
             if challengerWeight > incumbentWeight {
-                context.delete(incumbent)
+                incumbent.disappearedAt = now
+                incumbent.sourceID = "retired|\(incumbent.id.uuidString)"
                 survivors.removeAll { $0 === incumbent }
                 bySourceID[event.sourceID] = event
                 survivors.append(event)
             } else {
-                context.delete(event)
+                event.disappearedAt = now
+                event.sourceID = "retired|\(event.id.uuidString)"
             }
         }
         return survivors

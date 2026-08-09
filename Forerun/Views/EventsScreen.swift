@@ -157,7 +157,7 @@ struct EventsScreen: View {
         let hasRules = !app.settings.trackedCalendarIDs.isEmpty
             || !app.settings.autoTrackFamilies.isEmpty
         if app.availableCalendars.isEmpty {
-            return "No calendars connected yet."
+            return "There are no calendars on this iPhone yet."
         }
         if hasRules {
             return "Nothing on the calendars you picked for the next 60 days."
@@ -257,7 +257,8 @@ struct EventRow: View {
 
             if showsDisclosure {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(TypeRamp.micro())
+                    .imageScale(.small)
                     .foregroundStyle(Palette.hairline)
                     .padding(.top, 4)
             }

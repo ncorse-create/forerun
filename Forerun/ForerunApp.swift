@@ -13,7 +13,10 @@ struct ForerunApp: App {
     init() {
         NavigationBarAppearance.apply()
 
-        let result = Result { try ForerunStore.container() }
+        // The process-wide container. App Intents run inside this same process, so they must not
+        // build their own — two containers over one store file do not share change notifications.
+        let result: Result<ModelContainer, any Error> = ForerunStore.shared
+            .map { .success($0) } ?? Result { try ForerunStore.container() }
         container = result
 
         // Background task registration has to happen before launch finishes, so it cannot wait
@@ -21,6 +24,9 @@ struct ForerunApp: App {
         if case .success(let container) = result {
             let environment = AppEnvironment(container: container)
             _app = State(initialValue: environment)
+            // Before launch finishes, so a cold launch from a notification tap still delivers
+            // its response.
+            environment.registerNotificationHandling()
             BackgroundRefresh.register {
                 await environment.refresh()
             }

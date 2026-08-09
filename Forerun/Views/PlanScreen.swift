@@ -62,6 +62,8 @@ struct PlanScreen: View {
                 ScratchpadSection(event: event)
                 Hairline()
                 EventPeopleSection(event: event)
+                Hairline()
+                ProvenanceNote(kind: event.kind)
             }
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
@@ -198,12 +200,19 @@ struct PlanScreen: View {
     }
 
     private var emptySentence: String {
-        switch event.kind {
-        case .unknown:
-            "Forerun doesn't know what this is yet. Tell it, and it'll build the run-up."
-        default:
-            "There's nothing left to do before this one."
+        if event.kind == .unknown {
+            return "Forerun doesn't know what this is yet. Tell it, and it'll build the run-up."
         }
+        if !app.settings.enabledEventKinds.contains(event.kind) {
+            return "Forerun isn't planning a run-up for \(event.kind.displayName.lowercased()) "
+                + "events. You can turn that back on in Settings."
+        }
+        if event.startDate < .now {
+            return "This one's been and gone."
+        }
+        // A plan can also come back empty because every rung landed in the past, which is a
+        // different thing from having finished the run-up.
+        return "There's no run-up left for this one — it's too close."
     }
 
     // MARK: Header
@@ -225,7 +234,8 @@ struct PlanScreen: View {
                 HStack(spacing: 5) {
                     Text(event.kind.displayName)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(TypeRamp.micro())
+                        .imageScale(.small)
                 }
                 .font(TypeRamp.micro())
                 .foregroundStyle(Palette.amber)
@@ -271,6 +281,7 @@ struct PlanScreen: View {
                         }
                     }
                 },
+                onReopen: { Task { await app.reopen(step) } },
                 onMessage: messageAction(for: step),
                 onBlockTime: blockTimeAction(for: step)
             )
@@ -291,6 +302,7 @@ private struct StepRow: View {
     let onDone: () -> Void
     let onSkip: () -> Void
     let onSnooze: () -> Void
+    let onReopen: () -> Void
     /// Nil for steps aimed at yourself — there is nobody to message.
     var onMessage: (() -> Void)?
     /// Only the buildWork "block the working hours" rung, and only before it has done so.
@@ -319,10 +331,16 @@ private struct StepRow: View {
                     .tint(Palette.clay)
             }
         }
-        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+        // Deliberately NOT a full swipe. Nothing used to write `.pending` back, so a stray
+        // left-to-right flick permanently marked a step done and the only recovery was deleting
+        // it — which also destroyed the outcome the skip-rate diagnostic depends on.
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
             if !isResolved {
                 Button("Done", systemImage: "checkmark") { onDone() }
                     .tint(Palette.amber)
+            } else {
+                Button("Undo", systemImage: "arrow.uturn.backward") { onReopen() }
+                    .tint(Palette.graphite)
             }
         }
         .accessibilityElement(children: .combine)
@@ -330,10 +348,14 @@ private struct StepRow: View {
         .accessibilityValue(stateLabel ?? "Pending")
         .accessibilityHint("Double tap to edit this step")
         .accessibilityActions {
-            if !isResolved {
+            if isResolved {
+                Button("Undo", action: onReopen)
+            } else {
                 Button("Mark done", action: onDone)
                 Button("Skip", action: onSkip)
                 Button("Snooze one day", action: onSnooze)
+                if let onMessage { Button("Message", action: onMessage) }
+                if let onBlockTime { Button("Block the time", action: onBlockTime) }
             }
         }
     }
@@ -505,7 +527,9 @@ struct StepEditorSheet: View {
                 }
 
                 Section {
-                    DatePicker("Fires", selection: $draftDate)
+                    // Bounded by the event: a pre-event step pinned after its own event would
+                    // fire about something that has already happened.
+                    DatePicker("Fires", selection: $draftDate, in: dateRange)
                     Toggle("Keep this time", isOn: $pinTime)
                         .tint(Palette.amber)
                 } footer: {
@@ -521,6 +545,19 @@ struct StepEditorSheet: View {
                         }
                     }
                     .pickerStyle(.menu)
+                }
+
+                if step.state.isResolved {
+                    Section {
+                        Button("Put this step back") {
+                            Task {
+                                await app.reopen(step)
+                                dismiss()
+                            }
+                        }
+                    } footer: {
+                        Text("Marks it pending again and forgets that you'd dealt with it.")
+                    }
                 }
 
                 Section {
@@ -542,6 +579,9 @@ struct StepEditorSheet: View {
                         save()
                         dismiss()
                     }
+                    // An empty sentence would be saved as a user edit, which locked decision 7
+                    // makes permanent — a blank row on Today and a notification with no body.
+                    .disabled(draftCopy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .confirmationDialog(
@@ -564,6 +604,16 @@ struct StepEditorSheet: View {
             draftAudience = step.audience
             pinTime = step.userPinnedTime
         }
+    }
+
+    /// A follow-up step legitimately fires after the event; a pre-event step never should.
+    private var dateRange: ClosedRange<Date> {
+        let floor = Date(timeIntervalSinceReferenceDate: 0)
+        let ceiling = step.offsetSeconds < 0
+            ? event.startDate
+            : event.startDate.addingTimeInterval(365 * 86_400)
+        guard ceiling > floor else { return floor...floor.addingTimeInterval(1) }
+        return floor...ceiling
     }
 
     private func save() {
@@ -693,6 +743,36 @@ struct KindPickerSheet: View {
 }
 
 
+/// Where these lead times come from, stated honestly.
+///
+/// The playbooks distinguish research-backed spacing from practitioner convention, and CLAUDE.md
+/// requires the second kind be labelled "recommended" rather than presented as fact. Without this
+/// the hedged strings were written and then never shown, so every lead time arrived with no
+/// provenance at all.
+private struct ProvenanceNote: View {
+    let kind: EventKind
+
+    var body: some View {
+        let playbook = PlaybookLibrary.playbook(for: kind)
+        if !playbook.steps.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("WHY THESE TIMES")
+                    .font(TypeRamp.micro())
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.muted)
+                Text(playbook.provenance)
+                    .font(TypeRamp.caption())
+                    .foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Metrics.hMargin)
+            .padding(.vertical, 14)
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
 /// A small bordered action inside a step row. Not a card — a chip on the same surface.
 private struct ActionChip: View {
     let title: String
@@ -724,7 +804,7 @@ struct ShareTextSheet: View {
         NavigationStack {
             ScrollView {
                 Text(text)
-                    .font(.system(.body, design: .monospaced))
+                    .font(TypeRamp.monoBody())
                     .foregroundStyle(Palette.ink)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -2,6 +2,7 @@ import AppIntents
 import ForerunCore
 import Foundation
 import SwiftData
+import UserNotifications
 
 /// "What do I owe my team this week?"
 ///
@@ -22,8 +23,7 @@ struct WhatDoIOweIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
-        let container = try ForerunStore.container()
-        let context = ModelContext(container)
+        let context = try IntentQueries.context()
         let steps = IntentQueries.stepsDue(within: 7, audience: audience, context: context)
 
         guard !steps.isEmpty else {
@@ -55,9 +55,10 @@ struct NextStepIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let container = try ForerunStore.container()
-        let context = ModelContext(container)
-        guard let next = IntentQueries.stepsDue(within: 60, audience: .everyone, context: context).first else {
+        let context = try IntentQueries.context()
+        guard let next = IntentQueries.stepsDue(
+            within: IntentQueries.horizonDays, audience: .everyone, context: context
+        ).first else {
             return .result(dialog: IntentDialog("Nothing needs you yet."))
         }
         return .result(dialog: IntentDialog("\(next.copy) — for \(next.eventTitle), \(next.whenLabel)."))
@@ -75,24 +76,25 @@ struct MarkNextStepDoneIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let container = try ForerunStore.container()
-        let context = ModelContext(container)
+        let context = try IntentQueries.context()
         guard let next = IntentQueries.nextSchedulableStep(context: context) else {
             return .result(dialog: IntentDialog("There's nothing waiting."))
         }
 
         let copy = next.effectiveCopy
-        next.state = .done
-        if !next.isCustom {
-            context.insert(StepOutcome(
-                playbookStepID: next.playbookStepID,
-                kind: next.plan?.event?.kind ?? .unknown,
-                audience: next.audience,
-                offsetSeconds: next.offsetSeconds,
-                state: .done,
-                fromNotification: false
-            ))
-        }
+
+        // Routed through the same resolver the app and the notification actions use, so the
+        // `!isResolved` guard, the custom-step exclusion and the outcome write all behave
+        // identically. Duplicating it here was one edit away from double-counting.
+        StepResolution.resolve(next, as: .done, fromNotification: false, context: context)
+
+        // Cancel the reminder too. Without this, Siri says "Marked done" and the notification
+        // for that very step arrives anyway.
+        let identifier = next.notificationIdentifier
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: [identifier])
+        UNUserNotificationCenter.current()
+            .removeDeliveredNotifications(withIdentifiers: [identifier])
         try? context.save()
 
         return .result(dialog: IntentDialog("Marked done: \(copy)"))
@@ -156,11 +158,23 @@ struct IntentStepRow: Identifiable, Sendable {
 }
 
 enum IntentQueries {
-    /// Opens its own container rather than reaching for the app's.
+    /// How far ahead "next" reaches. Shared by every intent, because `NextStepIntent` saying
+    /// "nothing needs you yet" while `MarkNextStepDoneIntent` silently resolved a step ninety
+    /// days out is two intents disagreeing about the same word.
+    static let horizonDays = 60
+
+    /// A context on the process-wide container.
     ///
-    /// An intent can run while the app is not, so there is no `AppEnvironment` to borrow. Both
-    /// point at the same on-disk store, and writes are saved immediately so the app picks them
-    /// up on its next foreground.
+    /// An intent runs inside the app's process — Siri launches the app to serve it — so building
+    /// a second container here gave the app a stale view of anything the intent wrote.
+    @MainActor
+    static func context() throws -> ModelContext {
+        guard let container = ForerunStore.shared else {
+            throw ForerunStartupError.environmentUnavailable
+        }
+        return ModelContext(container)
+    }
+
     @MainActor
     static func stepsDue(
         within days: Int,
@@ -191,14 +205,18 @@ enum IntentQueries {
             .sorted { $0.fireDate < $1.fireDate }
     }
 
+    /// The same "next" `NextStepIntent` reports, so marking it done cannot resolve something the
+    /// user was never told about.
     @MainActor
     static func nextSchedulableStep(context: ModelContext) -> PrepStep? {
+        let horizon = Calendar.current.date(byAdding: .day, value: horizonDays, to: .now) ?? .now
         let events = (try? context.fetch(FetchDescriptor<TrackedEvent>())) ?? []
         return events
             .filter { $0.disappearedAt == nil && !$0.isDuplicate }
             .compactMap(\.plan)
             .flatMap(\.steps)
             .filter { $0.state.isSchedulable || $0.state == .fired }
+            .filter { ($0.snoozedUntil ?? $0.fireDate) <= horizon }
             .min { ($0.snoozedUntil ?? $0.fireDate) < ($1.snoozedUntil ?? $1.fireDate) }
     }
 }

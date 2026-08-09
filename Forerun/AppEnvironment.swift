@@ -58,6 +58,17 @@ final class AppEnvironment {
 
     // MARK: Lifecycle
 
+    /// Registers the notification delegate and its categories.
+    ///
+    /// Called from `ForerunApp.init`, not from `start()`. `start()` runs from a view's `.task`,
+    /// which is after `didFinishLaunchingWithOptions` and after an `await` — so on a cold launch
+    /// from a notification tap the response was already delivered and dropped: no deep link, and
+    /// the step never left `.pending`.
+    func registerNotificationHandling() {
+        UNUserNotificationCenter.current().delegate = notifications
+        scheduler.registerCategories()
+    }
+
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
@@ -74,6 +85,10 @@ final class AppEnvironment {
         // built in the first moments of launch is complete, just not tailored.
         planning.use(provider: await ProviderResolver.make())
 
+        // The delegate and the categories are registered in `ForerunApp.init`, before launch
+        // finishes — a cold launch from a notification tap delivers its response before this
+        // runs, and a delegate set afterwards misses it entirely. Everything the delegate needs
+        // is wired here, which is why `wire(...)` is a separate step from registration.
         notifications.onDeepLink = { [weak self] eventID in
             guard let self else { return }
             var descriptor = FetchDescriptor<TrackedEvent>(predicate: #Predicate { $0.id == eventID })
@@ -81,8 +96,6 @@ final class AppEnvironment {
             deepLinkedEvent = try? context.fetch(descriptor).first
         }
 
-        UNUserNotificationCenter.current().delegate = notifications
-        scheduler.registerCategories()
         await scheduler.refreshAuthorizationStatus()
 
         calendarChanges.start { [weak self] in
@@ -274,6 +287,42 @@ final class AppEnvironment {
     @discardableResult
     func snooze(_ step: PrepStep) async -> Bool {
         await planning.snooze(step)
+    }
+
+    /// Undoes a done or skipped step.
+    ///
+    /// Without this, a single stray swipe was permanent: nothing anywhere wrote `.pending` back,
+    /// so the only way to recover a mis-swiped step was to delete it — which also destroyed the
+    /// outcome the skip-rate diagnostic depends on. The recorded outcome is removed too, so the
+    /// diagnostic does not keep counting a resolution the user took back.
+    func reopen(_ step: PrepStep) async {
+        guard step.state.isResolved || step.state == .fired else { return }
+        StepOutcome.removeOutcome(forStepID: step.id, in: context)
+        step.state = .pending
+        step.snoozedUntil = nil
+        try? context.save()
+        await scheduler.refreshWindow(context: context, settings: settings)
+    }
+
+    /// True when reminders cannot arrive. Surfaced on Today and in Settings — an app whose whole
+    /// job is notifications must not go quiet without saying why.
+    var notificationsAreBlocked: Bool {
+        switch scheduler.authorizationStatus {
+        case .denied: true
+        case .notDetermined: false
+        default: false
+        }
+    }
+
+    var notificationStatusLabel: String {
+        switch scheduler.authorizationStatus {
+        case .authorized: "On"
+        case .provisional: "Quiet delivery"
+        case .ephemeral: "Temporary"
+        case .denied: "Off"
+        case .notDetermined: "Not asked yet"
+        @unknown default: "Unknown"
+        }
     }
 
     /// A step's copy, time or audience changed. The plan is not rebuilt — the user edited this
@@ -479,7 +528,12 @@ final class AppEnvironment {
     /// Leaves the app in a first-launch state without needing a relaunch.
     func deleteAllData() async {
         scheduler.cancelAll()
+        // The TickTick token lives in the Keychain, which survives both this and deleting the
+        // app itself. Leaving it behind made two sentences in the privacy policy false, and left
+        // the app reporting TickTick as connected with no connection date.
+        await tickTickAuth.disconnect()
         DataExporter.deleteAll(in: context, settings: settings)
+        await refreshTickTickState()
         await refresh()
     }
 
