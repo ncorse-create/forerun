@@ -31,6 +31,12 @@ struct RootView: View {
             }
         }
         .tint(Palette.amber)
+        .onChange(of: app.deepLinkedEvent) { _, event in
+            // The plan is pushed onto Today's stack, so the tab has to come with it — otherwise
+            // tapping a notification while the Events tab is showing does nothing visible.
+            guard event != nil else { return }
+            selection = .today
+        }
         .onChange(of: scenePhase) { _, phase in
             // Foreground is one of the four reschedule triggers. The others are the background
             // refresh task, a calendar change, and a settings change.

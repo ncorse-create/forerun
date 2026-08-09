@@ -49,6 +49,9 @@ public final class PrepStep {
     public var snoozedUntil: Date?
     /// Set once a message composer reported `.sent` for this step.
     public var handedOffAt: Date?
+    /// The `EKEvent` identifier of a working block this step created, so the block can be
+    /// removed again. Only ever set by the buildWork write-back.
+    public var calendarBlockIdentifier: String?
 
     public var plan: PrepPlan?
 
@@ -85,6 +88,7 @@ public final class PrepStep {
         self.isCustom = isCustom
         self.snoozedUntil = nil
         self.handedOffAt = nil
+        self.calendarBlockIdentifier = nil
     }
 }
 

@@ -20,13 +20,8 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     /// Snooze is a scheduling decision, so it goes through the engine rather than through
     /// arithmetic here. See `PlanningCoordinator.snooze`.
     weak var planning: PlanningCoordinator?
-    /// Set when a notification was tapped, so the app can open the right plan.
-    var pendingDeepLink: DeepLink?
-
-    struct DeepLink: Equatable {
-        let eventID: UUID
-        let stepID: UUID
-    }
+    /// Called when a notification is tapped, so the app can push the right plan.
+    var onDeepLink: (@MainActor (UUID) -> Void)?
 
     // MARK: Presentation
 
@@ -89,7 +84,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             }
 
         case UNNotificationDefaultActionIdentifier:
-            pendingDeepLink = DeepLink(eventID: eventID, stepID: stepID)
+            onDeepLink?(eventID)
             // Tapping is not resolving. The step stays pending until the user says otherwise.
             if step.state == .pending { step.state = .fired }
 

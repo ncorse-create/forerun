@@ -326,6 +326,13 @@ final class PlanningCoordinator: PlanReconciling {
         plan.generatedAt = .now
     }
 
+    /// Phrasing for a message draft rather than a notification body. Goes through the same
+    /// provider and the same validator; only the character budget differs.
+    func phraseForHandoff(_ request: PhrasingRequest) async -> String? {
+        guard await provider.isAvailable else { return nil }
+        return await provider.phrase(request)
+    }
+
     // MARK: Phrasing
 
     /// Wording only. Runs after the plan is already built and saved, so a slow or absent model

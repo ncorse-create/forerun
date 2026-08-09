@@ -39,6 +39,12 @@ final class AppEnvironment {
     private(set) var calendarAccessError: EventSourceError?
     private(set) var hasStarted = false
 
+    /// Set when a notification is tapped, cleared once the Plan screen has been pushed. Without
+    /// this, tapping a reminder opened the app to whatever screen it was last on — which is the
+    /// opposite of the whole point: the notification says "send leads the schedule," and the
+    /// schedule is attached to the event.
+    var deepLinkedEvent: TrackedEvent?
+
     init(container: ModelContainer, sync: EventSyncService = EventSyncService()) {
         let context = ModelContext(container)
         self.context = context
@@ -67,6 +73,13 @@ final class AppEnvironment {
         // query. Until it resolves, the heuristic provider is already in place — so a plan
         // built in the first moments of launch is complete, just not tailored.
         planning.use(provider: await ProviderResolver.make())
+
+        notifications.onDeepLink = { [weak self] eventID in
+            guard let self else { return }
+            var descriptor = FetchDescriptor<TrackedEvent>(predicate: #Predicate { $0.id == eventID })
+            descriptor.fetchLimit = 1
+            deepLinkedEvent = try? context.fetch(descriptor).first
+        }
 
         UNUserNotificationCenter.current().delegate = notifications
         scheduler.registerCategories()
@@ -320,6 +333,168 @@ final class AppEnvironment {
         try? context.save()
         await requestNotificationsIfNeeded()
         await scheduler.refreshWindow(context: context, settings: settings)
+    }
+
+    // MARK: People and handoff
+
+    func addContacts(_ people: [(identifier: String, name: String)], to event: TrackedEvent, audience: Audience) {
+        for person in people where !event.contacts.contains(where: { $0.contactIdentifier == person.identifier }) {
+            let contact = EventContact(
+                contactIdentifier: person.identifier,
+                displayName: person.name,
+                audience: audience
+            )
+            contact.event = event
+            event.contacts.append(contact)
+            context.insert(contact)
+        }
+        try? context.save()
+    }
+
+    func removeContact(_ contact: EventContact, from event: TrackedEvent) {
+        event.contacts.removeAll { $0.id == contact.id }
+        context.delete(contact)
+        try? context.save()
+    }
+
+    /// The compose sheet reported `.sent`, so the step is genuinely done.
+    func messageWasSent(for step: PrepStep) async {
+        step.handedOffAt = .now
+        await resolve(step, as: .done)
+    }
+
+    // MARK: Calendar write-back
+
+    let calendarWriter = CalendarWriter()
+
+    /// Creates the working block for a buildWork step and remembers it so it can be undone.
+    /// Returns a sentence when it could not, rather than failing silently.
+    func createWorkBlock(for step: PrepStep, event: TrackedEvent) async -> String? {
+        guard step.calendarBlockIdentifier == nil else { return "That block is already on your calendar." }
+        var block = WorkBlockPlanner.proposedBlock(for: event)
+        block.calendarID = settings.writeBackCalendarID
+        do {
+            guard let identifier = try await calendarWriter.createBlock(block) else {
+                return "None of your calendars can be written to. Subscribed calendars are read-only."
+            }
+            step.calendarBlockIdentifier = identifier
+            try? context.save()
+            await resolve(step, as: .done)
+            return nil
+        } catch EventSourceError.denied {
+            return "Forerun needs permission to add to your calendar. You can turn that on in Settings."
+        } catch {
+            return "Forerun couldn't add the block."
+        }
+    }
+
+    func removeWorkBlock(for step: PrepStep) async {
+        guard let identifier = step.calendarBlockIdentifier else { return }
+        _ = await calendarWriter.removeBlock(identifier: identifier)
+        step.calendarBlockIdentifier = nil
+        try? context.save()
+    }
+
+    // MARK: Scratchpad
+
+    func addNote(_ text: String, to event: TrackedEvent) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        insertScratchpad(ScratchpadItem(kind: .note, text: trimmed), into: event)
+    }
+
+    func addLink(_ urlString: String, title: String, to event: TrackedEvent) {
+        var trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // People paste "docs.google.com/…" far more often than they type the scheme.
+        if !trimmed.lowercased().hasPrefix("http") { trimmed = "https://\(trimmed)" }
+        guard URL(string: trimmed) != nil else { return }
+        insertScratchpad(
+            ScratchpadItem(
+                kind: .link,
+                text: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                urlString: trimmed
+            ),
+            into: event
+        )
+    }
+
+    func addPhoto(_ data: Data, to event: TrackedEvent) {
+        guard !data.isEmpty else { return }
+        insertScratchpad(ScratchpadItem(kind: .photo, imageData: data), into: event)
+    }
+
+    private func insertScratchpad(_ item: ScratchpadItem, into event: TrackedEvent) {
+        item.sortOrder = (event.scratchpad.map(\.sortOrder).max() ?? -1) + 1
+        item.event = event
+        event.scratchpad.append(item)
+        context.insert(item)
+        try? context.save()
+    }
+
+    func removeScratchpadItem(_ item: ScratchpadItem, from event: TrackedEvent) {
+        event.scratchpad.removeAll { $0.id == item.id }
+        context.delete(item)
+        try? context.save()
+    }
+
+    // MARK: Drafting
+
+    /// The pre-filled message body. Same validator as a notification body, but a longer budget —
+    /// a message to your team can afford a sentence a lock screen cannot.
+    func draftMessage(for step: PrepStep, event: TrackedEvent) async -> String {
+        let request = PhrasingRequest(
+            eventTitle: event.title,
+            actionVerb: step.actionVerb,
+            templateCopy: step.effectiveCopy,
+            audience: step.audience,
+            relativeLabel: step.relativeLabel,
+            characterBudget: 300
+        )
+        if let phrased = await planning.phraseForHandoff(request) { return phrased }
+        return step.effectiveCopy
+    }
+
+    /// Plain text a co-leader can read in a message. No sync, no invitation, no account.
+    func planAsText(for event: TrackedEvent) -> String {
+        PlanTextRenderer.render(event)
+    }
+
+    // MARK: Data
+
+    var appVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return [version, build.map { "(\($0))" }].compactMap { $0 }.joined(separator: " ")
+    }
+
+    func exportJSON() -> Data? {
+        try? DataExporter.export(
+            from: context,
+            settings: settings,
+            appVersion: appVersion
+        )
+    }
+
+    /// Leaves the app in a first-launch state without needing a relaunch.
+    func deleteAllData() async {
+        scheduler.cancelAll()
+        DataExporter.deleteAll(in: context, settings: settings)
+        await refresh()
+    }
+
+    /// The skip-rate diagnostic's read model. A pure roll-up over outcomes — never over people.
+    func skipRateRows() -> [SkipRateRow] {
+        let outcomes = (try? context.fetch(FetchDescriptor<StepOutcome>())) ?? []
+        return SkipRateRow.rows(from: outcomes.map {
+            StepOutcomeSnapshot(
+                playbookStepID: $0.playbookStepID,
+                kind: $0.kind,
+                audience: $0.audience,
+                offsetSeconds: $0.offsetSeconds,
+                state: $0.state
+            )
+        })
     }
 
     // MARK: Rules

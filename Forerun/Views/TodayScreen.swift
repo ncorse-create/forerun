@@ -9,6 +9,7 @@ import SwiftUI
 /// everything done leaves a calm screen, not a celebration.
 struct TodayScreen: View {
     @Environment(AppEnvironment.self) private var app
+    @State private var path = NavigationPath()
     @Query private var trackedEvents: [TrackedEvent]
 
     @State private var snoozeFailureMessage: String?
@@ -44,7 +45,7 @@ struct TodayScreen: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if dueNow.isEmpty && ahead.isEmpty {
                     EmptyStateSentence(sentence: "Nothing needs you today.")
@@ -57,6 +58,17 @@ struct TodayScreen: View {
             .paperBackground()
             .navigationTitle("Today")
             .refreshable { await app.refresh() }
+            .navigationDestination(for: TrackedEvent.self) { event in
+                PlanScreen(event: event)
+            }
+            .onChange(of: app.deepLinkedEvent) { _, event in
+                // A tapped notification lands on the plan the reminder came from, not on
+                // whatever screen the app happened to be showing.
+                guard let event else { return }
+                path = NavigationPath()
+                path.append(event)
+                app.deepLinkedEvent = nil
+            }
             .alert(
                 "No later left",
                 isPresented: Binding(
@@ -92,9 +104,7 @@ struct TodayScreen: View {
             if !ahead.isEmpty {
                 Section {
                     ForEach(ahead) { event in
-                        NavigationLink {
-                            PlanScreen(event: event)
-                        } label: {
+                        NavigationLink(value: event) {
                             AheadRow(event: event)
                         }
                         .listRowInsets(EdgeInsets())
@@ -117,9 +127,7 @@ struct TodayScreen: View {
     @ViewBuilder
     private func nowRow(_ step: PrepStep) -> some View {
         if let event = step.plan?.event {
-            NavigationLink {
-                PlanScreen(event: event)
-            } label: {
+            NavigationLink(value: event) {
                 NowRow(step: step, eventTitle: event.title)
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
