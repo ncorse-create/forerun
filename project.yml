@@ -1,0 +1,87 @@
+name: Forerun
+
+options:
+  bundleIdPrefix: com.persueapps
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "2Q8WAH33Y3"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+
+packages:
+  ForerunCore:
+    path: Packages/ForerunCore
+
+targets:
+  Forerun:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Forerun
+    dependencies:
+      - package: ForerunCore
+        product: ForerunCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.persueapps.forerun
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: Forerun/Resources/Info.plist
+    info:
+      path: Forerun/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Forerun
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes: [fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - app.persue.forerun.refresh
+        NSCalendarsFullAccessUsageDescription: "Forerun reads the events on the calendars you pick so it can plan the run-up to each one. Your events stay on this iPhone."
+        NSCalendarsWriteOnlyAccessUsageDescription: "Forerun can block the working hours for a deep-work event on your calendar when you ask it to."
+        NSContactsUsageDescription: "Forerun uses the people you pick to pre-fill a message to your team leads. It stores only their name and a reference, never their full contact card."
+        NSCameraUsageDescription: "Forerun attaches a photo of the whiteboard to the event so the material is there when the reminder fires. Photos stay on this iPhone."
+        CFBundleURLTypes:
+          - CFBundleURLName: com.persueapps.forerun
+            CFBundleURLSchemes: [forerun]
+        NSUserActivityTypes:
+          - ForerunOpenPlanIntent
+
+  ForerunTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: ForerunTests
+    dependencies:
+      - target: Forerun
+      - package: ForerunCore
+        product: ForerunCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Forerun:
+    build:
+      targets:
+        Forerun: all
+        ForerunTests: [test]
+    test:
+      targets:
+        - ForerunTests
