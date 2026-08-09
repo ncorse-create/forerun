@@ -53,9 +53,16 @@ public enum ColorFamily: String, Codable, CaseIterable, Sendable {
         switch s.count {
         case 6: break
         case 8:
-            // Ambiguous. TickTick and Apple both publish #RRGGBB; the 8-digit forms seen in the
-            // wild have been #RRGGBBAA far more often than #AARRGGBB, so drop the trailing pair.
-            s = String(s.prefix(6))
+            // Ambiguous: CSS writes #RRGGBBAA, Android writes #AARRGGBB, and nothing in the
+            // string says which. Default to the CSS reading and drop the trailing pair — but a
+            // trailing `00` under that reading means fully transparent, which no calendar
+            // publishes, so a leading-opaque/trailing-zero pattern is far more likely to be
+            // Android's opaque-black-ish form and is read the other way round.
+            let leading = String(s.prefix(2))
+            let trailing = String(s.suffix(2))
+            s = (trailing == "00" && leading != "00")
+                ? String(s.dropFirst(2))
+                : String(s.prefix(6))
         case 3:
             s = s.map { "\($0)\($0)" }.joined()
         default:

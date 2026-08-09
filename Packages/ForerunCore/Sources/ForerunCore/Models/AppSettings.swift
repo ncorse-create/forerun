@@ -42,7 +42,11 @@ public final class AppSettings {
     public static let maxStepsCeiling = 8
     public static let minStepsFloor = 3
 
-    public init(
+    /// Deliberately **not** public. `@Attribute(.unique)` in SwiftData is upsert, not throw, so
+    /// a stray `context.insert(AppSettings())` anywhere in the app would silently collapse onto
+    /// the existing row and reset every setting to its default. `loadOrCreate` is the only way
+    /// in from outside the package.
+    init(
         id: String = AppSettings.singletonID,
         quietHoursStart: Int = 22,
         quietHoursEnd: Int = 7,
@@ -96,8 +100,23 @@ public extension AppSettings {
         )
     }
 
+    /// True when the delivery hour the user picked falls inside their own quiet hours. The
+    /// engine resolves this on its own (it delivers at the end of quiet hours instead), but the
+    /// settings screen should say so rather than letting it look like a bug.
+    var deliveryHourCollidesWithQuietHours: Bool {
+        guard quietHoursStart != quietHoursEnd else { return false }
+        return quietHoursStart < quietHoursEnd
+            ? (preferredDeliveryHour >= quietHoursStart && preferredDeliveryHour < quietHoursEnd)
+            : (preferredDeliveryHour >= quietHoursStart || preferredDeliveryHour < quietHoursEnd)
+    }
+
     /// Clamps every stepper to its locked limit. Called on every write, not just on the UI side,
     /// so a bad import or a stale export cannot raise the cap.
+    ///
+    /// Fields are clamped independently and their *relationship* is deliberately not enforced:
+    /// `quietHoursStart == quietHoursEnd` legitimately means "quiet hours off," and a delivery
+    /// hour inside quiet hours is resolved by the engine rather than rejected here. See
+    /// `PrepPlanBuilder.deliveryHour(for:)`.
     func clampToLimits() {
         dailyNotificationBudget = min(max(dailyNotificationBudget, Self.minDailyBudget), Self.maxDailyBudget)
         maxStepsPerEvent = min(max(maxStepsPerEvent, Self.minStepsFloor), Self.maxStepsCeiling)
@@ -106,7 +125,20 @@ public extension AppSettings {
         quietHoursEnd = min(max(quietHoursEnd, 0), 23)
     }
 
+    /// An unsaved settings object for the one case where the store could not be read at all.
+    ///
+    /// Deliberately never inserted. `@Attribute(.unique)` is upsert in SwiftData, so inserting
+    /// this would collapse onto the real row and reset every setting to its default — which is
+    /// exactly why the memberwise initialiser is not public.
+    static func detachedDefaults() -> AppSettings {
+        AppSettings()
+    }
+
     /// Fetches the singleton, creating and inserting it on first launch.
+    ///
+    /// Saves immediately after inserting. Without the save, a second context on the same
+    /// container cannot see the pending insert, creates its own, and the unique constraint
+    /// upserts them into one row — silently discarding whichever context wrote first.
     @MainActor
     static func loadOrCreate(in context: ModelContext) throws -> AppSettings {
         let target = AppSettings.singletonID
@@ -120,6 +152,7 @@ public extension AppSettings {
         }
         let created = AppSettings()
         context.insert(created)
+        try context.save()
         return created
     }
 }

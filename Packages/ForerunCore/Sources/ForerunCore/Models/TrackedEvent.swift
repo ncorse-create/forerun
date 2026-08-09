@@ -3,10 +3,15 @@ import SwiftData
 
 /// An event the user asked Forerun to pay attention to.
 ///
-/// Enum-typed fields are stored as their raw strings. SwiftData can persist `RawRepresentable`
-/// enums directly, but a raw string survives a case being renamed in Swift, and a plan that
-/// says "version the schema from the first commit" should not have its predicates break because
-/// someone tidied an enum.
+/// Enum-typed fields are stored as their raw strings so that `#Predicate` can compare them
+/// directly and so the on-disk representation is legible in the JSON export.
+///
+/// This does **not** make unknown values durable: every computed accessor coerces an
+/// unrecognized raw to its fallback the first time anything writes through it, so a value from
+/// a newer build is lost on the first save, not preserved. That is an accepted trade — the
+/// fallbacks are chosen to fail in the safe direction (see `PrepStep.audience` and
+/// `PrepStep.state`) — but it is not a forward-compatibility mechanism, and a genuine schema
+/// change still needs a new `VersionedSchema` and a migration stage.
 @Model
 public final class TrackedEvent {
     @Attribute(.unique) public var id: UUID
@@ -137,7 +142,12 @@ public extension TrackedEvent {
 
     /// Copies the mutable fields from a fresh sync. Deliberately does **not** touch `kind`,
     /// `kindWasConfirmedByUser`, or anything the user owns.
+    ///
+    /// Refuses a mismatched record outright. `sourceID` is the identity, and it is not among
+    /// the fields copied, so a mis-wired call would otherwise write another event's title and
+    /// date onto this row and leave no trace of having done it.
     func apply(_ event: NormalizedEvent, at date: Date = .now) {
+        guard event.sourceID == sourceID else { return }
         title = event.title
         notes = event.notes
         startDate = event.startDate

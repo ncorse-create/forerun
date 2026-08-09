@@ -36,6 +36,12 @@ public enum ForerunMigrationPlan: SchemaMigrationPlan {
     }
 }
 
+/// The only correct way to build the container.
+///
+/// A view calling `.modelContainer(for: TrackedEvent.self)` would build a *different* container
+/// with SwiftData's defaults, which include CloudKit mirroring when an iCloud entitlement is
+/// present. Mirroring plus `@Attribute(.unique)` traps at launch, so that mistake would not be
+/// caught until a device build. Everything goes through here.
 public enum ForerunStore {
     /// The live on-disk container. No CloudKit: `cloudKitDatabase: .none` is explicit rather
     /// than implied, because adding an iCloud entitlement later would otherwise silently switch

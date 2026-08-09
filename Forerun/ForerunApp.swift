@@ -8,20 +8,45 @@ struct ForerunApp: App {
     /// failure path has to be a real screen rather than a crash — a user whose store is corrupt
     /// needs a way out that is not "delete the app."
     private let container: Result<ModelContainer, any Error>
+    @State private var app: AppEnvironment?
 
     init() {
-        container = Result { try ForerunStore.container() }
+        let result = Result { try ForerunStore.container() }
+        container = result
+
+        // Background task registration has to happen before launch finishes, so it cannot wait
+        // for a view's `.task`. The environment is built here for the same reason.
+        if case .success(let container) = result {
+            let environment = AppEnvironment(container: container)
+            _app = State(initialValue: environment)
+            BackgroundRefresh.register {
+                await environment.refresh()
+            }
+        }
     }
 
     var body: some Scene {
         WindowGroup {
-            switch container {
-            case .success(let container):
+            switch (container, app) {
+            case (.success, .some(let app)):
                 RootView()
-                    .modelContainer(container)
-            case .failure(let error):
+                    .modelContainer(app.context.container)
+                    .environment(app)
+                    .task { await app.start() }
+            case (.failure(let error), _):
                 StoreFailureView(error: error)
+            case (.success, .none):
+                // Unreachable: `app` is set in the same branch that produced `.success`.
+                StoreFailureView(error: ForerunStartupError.environmentUnavailable)
             }
         }
+    }
+}
+
+enum ForerunStartupError: LocalizedError {
+    case environmentUnavailable
+
+    var errorDescription: String? {
+        "Forerun could not start its services."
     }
 }

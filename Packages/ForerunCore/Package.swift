@@ -21,7 +21,10 @@ let package = Package(
         .testTarget(
             name: "ForerunCoreTests",
             dependencies: ["ForerunCore"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .enableUpcomingFeature("ExistentialAny")
+            ]
         )
     ]
 )

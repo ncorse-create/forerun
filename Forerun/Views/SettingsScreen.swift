@@ -34,7 +34,7 @@ struct SettingsScreen: View {
     }
 
     private var trackingSummary: String {
-        guard let settings = app.settings else { return "None" }
+        let settings = app.settings
         let calendars = settings.trackedCalendarIDs.count
         let colors = settings.autoTrackFamilies.count
         switch (calendars, colors) {

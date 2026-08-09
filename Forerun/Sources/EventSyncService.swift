@@ -116,6 +116,9 @@ final class EventSyncService {
             now: now
         )
 
+        // One housekeeping pass, in the one place that already walks the store.
+        StepOutcome.prune(in: context, now: now)
+
         settings.lastSyncAt = now
         lastSyncedAt = now
         try? context.save()
@@ -138,7 +141,10 @@ final class EventSyncService {
             manuallyIncludedSourceIDs: Set(settings.manuallyIncludedSourceIDs)
         )
 
-        let existing = (try? context.fetch(FetchDescriptor<TrackedEvent>())) ?? []
+        let existing = collapseDuplicateRows(
+            (try? context.fetch(FetchDescriptor<TrackedEvent>())) ?? [],
+            context: context
+        )
         var bySourceID = Dictionary(existing.map { ($0.sourceID, $0) }, uniquingKeysWith: { first, _ in first })
         var seenSourceIDs: Set<String> = []
 
@@ -198,6 +204,48 @@ final class EventSyncService {
             context: context,
             now: now
         )
+    }
+
+    /// `sourceID` is the natural key but carries no unique constraint — SwiftData's uniqueness
+    /// is upsert rather than throw, so constraining it would silently *replace* a row and wipe
+    /// the plan attached to it. The guard lives here instead: if two rows ever share a
+    /// `sourceID`, keep the one with real work on it and delete the rest, before anything
+    /// downstream can schedule two sets of notifications for one event.
+    private func collapseDuplicateRows(
+        _ events: [TrackedEvent],
+        context: ModelContext
+    ) -> [TrackedEvent] {
+        var bySourceID: [String: TrackedEvent] = [:]
+        var survivors: [TrackedEvent] = []
+
+        for event in events.sorted(by: { $0.trackedAt < $1.trackedAt }) {
+            guard let incumbent = bySourceID[event.sourceID] else {
+                bySourceID[event.sourceID] = event
+                survivors.append(event)
+                continue
+            }
+            // Prefer whichever row a human has actually touched.
+            let incumbentWeight = weight(of: incumbent)
+            let challengerWeight = weight(of: event)
+            if challengerWeight > incumbentWeight {
+                context.delete(incumbent)
+                survivors.removeAll { $0 === incumbent }
+                bySourceID[event.sourceID] = event
+                survivors.append(event)
+            } else {
+                context.delete(event)
+            }
+        }
+        return survivors
+    }
+
+    private func weight(of event: TrackedEvent) -> Int {
+        var score = 0
+        if event.plan != nil { score += 4 }
+        score += event.scratchpad.count
+        score += event.contacts.count
+        if event.kindWasConfirmedByUser { score += 2 }
+        return score
     }
 
     /// Soft-delete, then purge on a delay. An event that briefly vanishes because a shared

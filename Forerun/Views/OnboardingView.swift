@@ -134,7 +134,7 @@ private struct ChooseWhatToTrackPage: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(app.availableCalendars.prefix(8)) { calendar in
                         Toggle(isOn: Binding(
-                            get: { app.settings?.trackedCalendarIDs.contains(calendar.id) ?? false },
+                            get: { app.settings.trackedCalendarIDs.contains(calendar.id) },
                             set: { newValue in
                                 Task { await app.setCalendarTracked(calendar.id, tracked: newValue) }
                             }

@@ -70,6 +70,16 @@ public struct NormalizedEvent: Sendable, Equatable, Identifiable, Hashable {
         self.hasRecurrenceRules = hasRecurrenceRules
     }
 
+    /// Characters that survive normalization.
+    ///
+    /// `CharacterSet.alphanumerics` is `L* + M* + N*`, so it **includes combining marks** —
+    /// variation selectors like U+FE0F and bare combining accents pass straight through. That
+    /// breaks dedup in both directions: `"☕️ Coffee"` and `"☕ Coffee"` normalize differently
+    /// (so the same event is listed twice), while `"❤️"` and `"☺️"` both normalize to a lone
+    /// variation selector and compare equal (so two different events are merged). Subtracting
+    /// the non-base characters fixes both.
+    private static let titleKeyCharacters = CharacterSet.alphanumerics.subtracting(.nonBaseCharacters)
+
     /// Title reduced to a comparison key: case-folded, punctuation-stripped, whitespace
     /// collapsed. Used for TickTick↔EventKit deduplication, where the same thing arrives with
     /// "Sunday Service" from one source and "sunday service." from the other.
@@ -77,7 +87,7 @@ public struct NormalizedEvent: Sendable, Equatable, Identifiable, Hashable {
         let folded = title.folding(options: [.caseInsensitive, .diacriticInsensitive],
                                    locale: Locale(identifier: "en_US_POSIX"))
         let stripped = folded.unicodeScalars.map { scalar -> Character in
-            CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : " "
+            Self.titleKeyCharacters.contains(scalar) ? Character(scalar) : " "
         }
         return String(stripped).split(separator: " ").joined(separator: " ")
     }

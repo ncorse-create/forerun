@@ -10,7 +10,7 @@ struct TrackingRulesScreen: View {
     @Environment(AppEnvironment.self) private var app
     @Environment(\.dismiss) private var dismiss
 
-    private var settings: AppSettings? { app.settings }
+    private var settings: AppSettings { app.settings }
 
     var body: some View {
         NavigationStack {
@@ -29,7 +29,7 @@ struct TrackingRulesScreen: View {
                     colorSection
                 }
 
-                if let settings, !settings.manuallyExcludedSourceIDs.isEmpty {
+                if !settings.manuallyExcludedSourceIDs.isEmpty {
                     Section {
                         Button("Clear \(settings.manuallyExcludedSourceIDs.count) untracked event\(settings.manuallyExcludedSourceIDs.count == 1 ? "" : "s")") {
                             settings.manuallyExcludedSourceIDs.removeAll()
@@ -57,7 +57,7 @@ struct TrackingRulesScreen: View {
         Section {
             ForEach(app.availableCalendars) { calendar in
                 Toggle(isOn: Binding(
-                    get: { settings?.trackedCalendarIDs.contains(calendar.id) ?? false },
+                    get: { settings.trackedCalendarIDs.contains(calendar.id) },
                     set: { newValue in
                         Task { await app.setCalendarTracked(calendar.id, tracked: newValue) }
                     }
@@ -92,7 +92,7 @@ struct TrackingRulesScreen: View {
         Section {
             ForEach(ColorFamily.allCases, id: \.self) { family in
                 Toggle(isOn: Binding(
-                    get: { settings?.autoTrackFamilies.contains(family) ?? false },
+                    get: { settings.autoTrackFamilies.contains(family) },
                     set: { newValue in
                         Task { await app.setColorFamilyTracked(family, tracked: newValue) }
                     }

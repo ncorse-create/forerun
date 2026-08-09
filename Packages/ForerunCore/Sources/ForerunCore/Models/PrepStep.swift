@@ -89,14 +89,24 @@ public final class PrepStep {
 }
 
 public extension PrepStep {
+    /// Falls back to `.leaders`, not `.me`. An unreadable raw value must fail *toward* locked
+    /// decision 2: `.me` sorts last, is not leadership, is not contactable, and would drop the
+    /// step out of the ordering check entirely. `.leaders` keeps it protected and contactable,
+    /// which is the safe direction to be wrong in.
     var audience: Audience {
-        get { Audience(rawValue: audienceRaw) ?? .me }
+        get { Audience(rawValue: audienceRaw) ?? .leaders }
         set { audienceRaw = newValue.rawValue }
     }
 
+    /// Falls back to `.skipped`, not `.pending`. `.pending` is schedulable, so an unreadable
+    /// state would re-arm work the user already finished and fire it at them a second time —
+    /// the over-notification failure this app is built to avoid. `.skipped` costs nothing.
     var state: StepState {
-        get { StepState(rawValue: stateRaw) ?? .pending }
+        get { StepState(rawValue: stateRaw) ?? .skipped }
         set {
+            // Only stamp on a real transition. Re-assigning the same value would otherwise
+            // dirty the context and throw away the time the step actually changed.
+            guard newValue.rawValue != stateRaw else { return }
             stateRaw = newValue.rawValue
             stateChangedAt = .now
         }
@@ -118,16 +128,21 @@ public extension PrepStep {
         "step.\(id.uuidString)"
     }
 
-    /// Relative label for the timeline: "3 days before", "on the day", "1 day after".
+    /// Relative label for the timeline: "3 days before", "2 hours before", "1 day after".
+    ///
+    /// The hour/day split is on the raw interval, not on a rounded day count — rounding first
+    /// makes everything from 12 hours upward report as "1 day," so a −18h step would claim to
+    /// be a day out.
     var relativeLabel: String {
-        let days = Int((abs(offsetSeconds) / 86_400).rounded())
-        let hours = Int((abs(offsetSeconds) / 3_600).rounded())
+        let magnitude = abs(offsetSeconds)
         let after = offsetSeconds > 0
-        if abs(offsetSeconds) < 3_600 { return after ? "just after" : "at the start" }
-        if days == 0 {
+        if magnitude < 3_600 { return after ? "just after" : "at the start" }
+        if magnitude < 86_400 {
+            let hours = Int((magnitude / 3_600).rounded())
             let unit = hours == 1 ? "hour" : "hours"
             return after ? "\(hours) \(unit) after" : "\(hours) \(unit) before"
         }
+        let days = Int((magnitude / 86_400).rounded())
         let unit = days == 1 ? "day" : "days"
         return after ? "\(days) \(unit) after" : "\(days) \(unit) before"
     }

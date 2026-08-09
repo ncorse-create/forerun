@@ -90,6 +90,9 @@ public enum TrackingRules {
                 kept.append(candidate)
             }
         }
+        // Sorted, not source-grouped. Callers group by day, and handing back "all calendar
+        // events, then all tasks" would silently interleave wrong.
+        kept.sort { $0.startDate < $1.startDate }
         return (kept, duplicates)
     }
 }

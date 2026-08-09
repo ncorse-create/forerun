@@ -5,9 +5,8 @@ import SwiftUI
 /// Three screens is the whole app. Today, Events, Plan — and Plan is reached from the other
 /// two, never from a tab. Settings lives behind a gear.
 struct RootView: View {
-    @Environment(\.modelContext) private var context
+    @Environment(AppEnvironment.self) private var app
     @Environment(\.scenePhase) private var scenePhase
-    @State private var app = AppEnvironment()
     @State private var selection: Destination = .today
 
     /// Not named `Tab` — SwiftUI owns that name in the iOS 18+ `TabView` API and shadowing it
@@ -18,7 +17,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if app.settings?.hasCompletedOnboarding == false {
+            if !app.settings.hasCompletedOnboarding {
                 OnboardingView()
             } else {
                 TabView(selection: $selection) {
@@ -32,11 +31,6 @@ struct RootView: View {
             }
         }
         .tint(Palette.amber)
-        .environment(app)
-        .task {
-            app.bootstrap(context: context)
-            await app.reloadCalendars()
-        }
         .onChange(of: scenePhase) { _, phase in
             // Foreground is one of the four reschedule triggers. The others are the background
             // refresh task, a calendar change, and a settings change.
