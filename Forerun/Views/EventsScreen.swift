@@ -36,12 +36,10 @@ struct EventsScreen: View {
                 if app.calendarAccessError != nil {
                     CalendarAccessGate()
                 } else if app.sync.browsableEvents.isEmpty {
-                    EmptyStateSentence(
-                        sentence: app.sync.isSyncing
-                            ? "Reading your calendar…"
-                            : "Nothing tracked yet. Tap an event to have Forerun plan the run-up."
-                    )
-                    .frame(maxHeight: .infinity)
+                    // Three genuinely different states, not one sentence covering all of them.
+                    // "Tap an event" is wrong advice when there is no event to tap.
+                    EmptyStateSentence(sentence: emptyStateSentence)
+                        .frame(maxHeight: .infinity)
                 } else {
                     eventList
                 }
@@ -65,7 +63,7 @@ struct EventsScreen: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingRules) { TrackingRulesScreen() }
+            .sheet(isPresented: $showingRules) { TrackingRulesSheet() }
             .sheet(isPresented: $showingSettings) { SettingsScreen() }
             .refreshable { await app.refresh() }
             .task { await app.refresh() }
@@ -111,6 +109,19 @@ struct EventsScreen: View {
             }
             .padding(.bottom, 32)
         }
+    }
+
+    private var emptyStateSentence: String {
+        if app.sync.isSyncing { return "Reading your calendar…" }
+        let hasRules = !app.settings.trackedCalendarIDs.isEmpty
+            || !app.settings.autoTrackFamilies.isEmpty
+        if app.availableCalendars.isEmpty {
+            return "No calendars connected yet."
+        }
+        if hasRules {
+            return "Nothing on the calendars you picked for the next 60 days."
+        }
+        return "Nothing on your calendar for the next 60 days."
     }
 
     private func toggle(_ event: NormalizedEvent) {
@@ -165,8 +176,12 @@ struct EventRow: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(alignment: .top, spacing: 12) {
-                // The tracked rail. Always occupies its width so rows do not shift when an
-                // event is tracked — motion is for state changes, not for layout.
+                // The tracked rail sits inside the 20pt margin, so the optical left edge of the
+                // row lines up with the day header and the hairline above it.
+                Spacer().frame(width: Metrics.hMargin - 8)
+
+                // Always occupies its width so rows do not shift when an event is tracked —
+                // motion is for state changes, not for layout.
                 Rectangle()
                     .fill(isTracked ? Palette.amber : Color.clear)
                     .frame(width: 3)

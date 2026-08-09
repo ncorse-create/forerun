@@ -94,7 +94,15 @@ actor EventKitSource: EventSource {
         let calendars = selectedCalendarIDs.isEmpty
             ? all
             : all.filter { selectedCalendarIDs.contains($0.calendarIdentifier) }
-        guard !calendars.isEmpty else { return [] }
+        // Returning empty here would be indistinguishable from "the user deleted everything,"
+        // and sync would start marking tracked events as disappeared. Selected IDs stop
+        // resolving for mundane reasons — iCloud signed out, an account removed, stale IDs
+        // after a restore — so this throws instead.
+        guard !calendars.isEmpty else {
+            throw selectedCalendarIDs.isEmpty
+                ? EventSourceError.notDetermined
+                : EventSourceError.noCalendarsResolved
+        }
 
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
         return store.events(matching: predicate).compactMap(Self.normalize(_:))
@@ -108,6 +116,23 @@ actor EventKitSource: EventSource {
     /// disambiguates them (Spike B).
     static func compositeSourceID(identifier: String, start: Date) -> String {
         "\(identifier)|\(start.timeIntervalSinceReferenceDate)"
+    }
+
+    /// The `eventIdentifier` half of a composite id, without the occurrence start.
+    ///
+    /// Sync needs this because the composite is *not* stable under an edit: dragging an event
+    /// five minutes in Calendar produces a different `sourceID` for the same real-world thing.
+    /// Matching on the series identifier lets a moved occurrence be recognised and rekeyed
+    /// instead of being treated as a deletion plus an insertion — which would destroy the plan,
+    /// the edited sentences, the scratchpad and the contacts attached to it.
+    static func seriesIdentifier(from sourceID: String) -> String {
+        String(sourceID.split(separator: "|", maxSplits: 1).first ?? "")
+    }
+
+    static func occurrenceStart(from sourceID: String) -> Date? {
+        let parts = sourceID.split(separator: "|", maxSplits: 1)
+        guard parts.count == 2, let interval = TimeInterval(parts[1]) else { return nil }
+        return Date(timeIntervalSinceReferenceDate: interval)
     }
 
     private static func normalize(_ event: EKEvent) -> NormalizedEvent? {

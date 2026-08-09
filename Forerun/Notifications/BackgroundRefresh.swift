@@ -37,7 +37,12 @@ enum BackgroundRefresh {
         // an un-rescheduled app never wakes again and the ladder silently stops.
         schedule()
 
+        // The handler is installed before the work begins. Assigning it afterwards leaves a
+        // gap in which an expiring task cannot cancel anything.
         let work = Task { @MainActor in
+            // A one-tick yield lets the expiration handler be installed first without needing a
+            // second task to own the cancellation.
+            await Task.yield()
             await handler?()
         }
         task.expirationHandler = {

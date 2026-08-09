@@ -38,6 +38,9 @@ final class EventSyncService {
     /// Finished events are kept this long so their follow-up steps can still fire and their
     /// outcomes can still be recorded.
     static let pastRetentionDays = 30
+    /// How far behind `now` the fetch reaches. Must exceed the largest positive playbook offset
+    /// (+1 day) plus the slack a quiet-hours shift can add.
+    static let lookBehindDays = 3
 
     let calendarSource: EventKitSource
     private(set) var tickTickSource: TickTickSource?
@@ -68,10 +71,13 @@ final class EventSyncService {
 
         let calendar = Calendar.current
         let end = calendar.date(byAdding: .day, value: Self.windowDays, to: now) ?? now
-        // Reach slightly behind now so an event that started an hour ago is still matched and
-        // its follow-up steps survive. Without this, a Sunday service drops out of sync at
-        // 10:01 and its "+1d thank your leads" step is orphaned.
-        let start = calendar.date(byAdding: .day, value: -1, to: now) ?? now
+        // The reach-back has to cover the largest *positive* playbook offset plus quiet-hours
+        // slack, not merely "an event that started an hour ago." The volunteer and buildWork
+        // playbooks both end at +1d, and a follow-up shifted out of quiet hours can land a day
+        // later again — so a one-day reach-back let a finished Sunday service fall out of the
+        // fetch, get stamped as disappeared, and have its still-pending "thank your leads"
+        // notification removed and never re-added.
+        let start = calendar.date(byAdding: .day, value: -Self.lookBehindDays, to: now) ?? now
 
         await calendarSource.setSelectedCalendarIDs(Set(settings.trackedCalendarIDs))
 
@@ -113,7 +119,8 @@ final class EventSyncService {
             duplicates: duplicates,
             context: context,
             settings: settings,
-            now: now
+            now: now,
+            fetchStart: start
         )
 
         // One housekeeping pass, in the one place that already walks the store.
@@ -132,7 +139,8 @@ final class EventSyncService {
         duplicates: [(dropped: NormalizedEvent, keptSourceID: String)],
         context: ModelContext,
         settings: AppSettings,
-        now: Date
+        now: Date,
+        fetchStart: Date
     ) async {
         let rules = TrackingSettings(
             trackedCalendarIDs: Set(settings.trackedCalendarIDs),
@@ -151,6 +159,21 @@ final class EventSyncService {
         for event in events {
             seenSourceIDs.insert(event.sourceID)
             let decision = TrackingRules.decide(for: event, settings: rules)
+
+            // A moved occurrence arrives with a *different* sourceID, because the composite id
+            // includes the occurrence start. Rekeying it here is what makes "drag an event five
+            // minutes in Calendar" a reschedule rather than a delete-and-recreate that takes the
+            // plan, the edited sentences, the scratchpad and the contacts with it.
+            if bySourceID[event.sourceID] == nil,
+               let moved = rekeyMovedOccurrence(event, among: bySourceID, seen: seenSourceIDs) {
+                let previousStart = moved.startDate
+                bySourceID[moved.sourceID] = nil
+                moved.sourceID = event.sourceID
+                moved.apply(event, at: now)
+                bySourceID[event.sourceID] = moved
+                await reconciler?.planNeedsRebuild(for: moved, previousStart: previousStart)
+                continue
+            }
 
             if let tracked = bySourceID[event.sourceID] {
                 if decision.reason == .manuallyExcluded {
@@ -188,8 +211,9 @@ final class EventSyncService {
             }
         }
 
-        // Mark TickTick records that lost a dedup match, so the Events screen can explain why
-        // the same thing is not listed twice.
+        // Mark TickTick records that lost a dedup match. The scheduler reads this to keep a
+        // duplicate from producing a second set of notifications; the Events screen does not
+        // list them at all, because `browsableEvents` already holds the deduplicated set.
         let duplicateIDs = Dictionary(
             duplicates.map { ($0.dropped.sourceID, $0.keptSourceID) },
             uniquingKeysWith: { first, _ in first }
@@ -202,8 +226,39 @@ final class EventSyncService {
             existing: Array(bySourceID.values),
             seenSourceIDs: seenSourceIDs,
             context: context,
-            now: now
+            now: now,
+            fetchStart: fetchStart,
+            sourcesReturnedNothing: events.isEmpty
         )
+    }
+
+    /// Finds the tracked row that this event *is*, after a time change moved its composite id.
+    ///
+    /// The match is deliberately narrow — same series identifier, same source, not already
+    /// claimed by another event in this batch, and the nearest such candidate wins. A recurring
+    /// series has many occurrences sharing one series identifier, so a loose match would happily
+    /// rekey next month's Sunday service onto this week's.
+    private func rekeyMovedOccurrence(
+        _ event: NormalizedEvent,
+        among tracked: [String: TrackedEvent],
+        seen: Set<String>
+    ) -> TrackedEvent? {
+        guard event.sourceType == .eventkit else { return nil }
+        let series = EventKitSource.seriesIdentifier(from: event.sourceID)
+        guard !series.isEmpty else { return nil }
+
+        let candidates = tracked.values.filter { candidate in
+            candidate.sourceType == .eventkit
+                && EventKitSource.seriesIdentifier(from: candidate.sourceID) == series
+                // A row the current batch already matched exactly is not a move — it is itself.
+                && !seen.contains(candidate.sourceID)
+        }
+        guard !candidates.isEmpty else { return nil }
+
+        return candidates.min {
+            abs($0.startDate.timeIntervalSince(event.startDate))
+                < abs($1.startDate.timeIntervalSince(event.startDate))
+        }
     }
 
     /// `sourceID` is the natural key but carries no unique constraint — SwiftData's uniqueness
@@ -241,7 +296,11 @@ final class EventSyncService {
 
     private func weight(of event: TrackedEvent) -> Int {
         var score = 0
-        if event.plan != nil { score += 4 }
+        if let plan = event.plan {
+            score += 4
+            // A plan the user has edited is worth far more than an untouched one.
+            score += plan.steps.filter(\.isUserOwned).count * 3
+        }
         score += event.scratchpad.count
         score += event.contacts.count
         if event.kindWasConfirmedByUser { score += 2 }
@@ -254,8 +313,16 @@ final class EventSyncService {
         existing: [TrackedEvent],
         seenSourceIDs: Set<String>,
         context: ModelContext,
-        now: Date
+        now: Date,
+        fetchStart: Date,
+        sourcesReturnedNothing: Bool
     ) {
+        // Every source came back empty. That is indistinguishable from "the user deleted their
+        // whole calendar," and it happens for mundane reasons — iCloud signed out, an account
+        // removed, calendar IDs gone stale after a restore. Refusing to judge is the only safe
+        // response; fourteen days of this would otherwise purge every plan in the app.
+        guard !sourcesReturnedNothing || existing.isEmpty else { return }
+
         let calendar = Calendar.current
         let purgeBefore = calendar.date(byAdding: .day, value: -Self.disappearedGraceDays, to: now) ?? now
         let pastCutoff = calendar.date(byAdding: .day, value: -Self.pastRetentionDays, to: now) ?? now
@@ -267,11 +334,19 @@ final class EventSyncService {
                 context.delete(tracked)
                 continue
             }
-            // Only events that *should* have been in this fetch can be judged missing. An event
-            // 90 days out is simply beyond the window.
-            let wasInWindow = tracked.startDate <= windowEnd
+            // Only events that *should* have been in this fetch can be judged missing, and the
+            // test has to be two-sided: the fetch range is [fetchStart, windowEnd], so an event
+            // that has fallen out the back is absent because it was never asked for, not because
+            // it was deleted.
+            let wasInWindow = tracked.startDate >= fetchStart && tracked.startDate <= windowEnd
             guard wasInWindow else { continue }
 
+            // A record dropped by deduplication is not missing — it lost to its twin, and the
+            // twin is what the user sees. Purging it would resurrect it on the next sync.
+            if tracked.isDuplicate {
+                tracked.disappearedAt = nil
+                continue
+            }
             if seenSourceIDs.contains(tracked.sourceID) {
                 tracked.disappearedAt = nil
             } else if let disappearedAt = tracked.disappearedAt {

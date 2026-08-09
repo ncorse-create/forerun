@@ -118,6 +118,10 @@ public enum EventSourceError: Error, Equatable, Sendable {
     case restricted
     /// iOS 17+ split calendar access. Write-only reads nothing, and is *not* the same as denied.
     case writeOnlyAccess
+    /// The user's selected calendars no longer resolve — signed out of iCloud, account removed,
+    /// stale identifiers after a restore. Distinct from "no events," because reconciling
+    /// against this would start deleting plans.
+    case noCalendarsResolved
     /// TickTick's access token expired and there is no refresh token (Spike A).
     case reauthenticationRequired
     case network(String)

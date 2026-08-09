@@ -173,6 +173,39 @@ final class PlanningCoordinator: PlanReconciling {
         }
     }
 
+    // MARK: Snoozing
+
+    /// Snooze goes through the engine's placement rules, not through arithmetic.
+    ///
+    /// Adding 86,400 seconds to a fire date escaped three invariants at once: it could land in
+    /// quiet hours, it ignored the daily budget — so "6 per day across all events" stopped
+    /// holding as soon as anything was snoozed — and it could push a pre-event reminder past the
+    /// event it was reminding you about.
+    ///
+    /// Returns false when there is nowhere legal left to put it, which the UI reports as "there
+    /// is no later left" rather than silently doing nothing.
+    @discardableResult
+    func snooze(_ step: PrepStep, by interval: TimeInterval = NotificationDelegate.snoozeInterval) async -> Bool {
+        guard let event = step.plan?.event else { return false }
+        let desired = (step.snoozedUntil ?? step.fireDate).addingTimeInterval(interval)
+
+        let placed = PrepPlanBuilder.placeSnooze(
+            desired: desired,
+            offsetSeconds: step.offsetSeconds,
+            eventStart: event.startDate,
+            isAllDay: event.isAllDay,
+            settings: settings.engineSettings,
+            context: schedulingContext(excluding: event, pinned: [])
+        )
+        guard let placed else { return false }
+
+        step.snoozedUntil = placed
+        step.state = .snoozed
+        try? context.save()
+        await scheduler?.refreshWindow(context: context, settings: settings)
+        return true
+    }
+
     // MARK: Engine plumbing
 
     private func makeDraft(for event: TrackedEvent, pinned: [PinnedStep] = []) -> PlanDraft {

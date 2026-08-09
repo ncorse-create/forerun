@@ -8,13 +8,15 @@ import SwiftUI
 /// by either, which is stated in the footer rather than left to be discovered.
 struct TrackingRulesScreen: View {
     @Environment(AppEnvironment.self) private var app
-    @Environment(\.dismiss) private var dismiss
 
     private var settings: AppSettings { app.settings }
 
+    /// Deliberately owns no `NavigationStack` and no Done button. This view is *pushed* from
+    /// Settings and *presented* as a sheet from Events; owning a stack would render a second
+    /// navigation bar in the pushed case and make its dismiss pop instead of dismiss. The sheet
+    /// call site wraps it (`TrackingRulesSheet`).
     var body: some View {
-        NavigationStack {
-            Form {
+        Form {
                 if app.availableCalendars.isEmpty {
                     Section {
                         Text("Connect a calendar to choose what Forerun watches.")
@@ -41,17 +43,12 @@ struct TrackingRulesScreen: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Palette.paper)
-            .navigationTitle("What to track")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
+        .scrollContentBackground(.hidden)
+        .background(Palette.paper)
+        .navigationTitle("What to track")
+        .navigationBarTitleDisplayMode(.inline)
     }
+
 
     private var calendarSection: some View {
         Section {
@@ -112,6 +109,23 @@ struct TrackingRulesScreen: View {
         } footer: {
             Text("If you colour-code your calendar, this is usually the faster rule. "
                  + "Colours and calendars stack — an event matching either one is tracked.")
+        }
+    }
+}
+
+/// The sheet wrapper. Owns the stack and the Done button so `TrackingRulesScreen` itself can be
+/// pushed without growing a second navigation bar.
+struct TrackingRulesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            TrackingRulesScreen()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
         }
     }
 }

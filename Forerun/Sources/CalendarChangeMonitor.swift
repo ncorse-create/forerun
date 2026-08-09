@@ -59,10 +59,10 @@ final class TimeZoneChangeMonitor {
 
     func start(onChange: @escaping @MainActor @Sendable () async -> Void) {
         stop()
-        observationTask = Task {
+        observationTask = Task { [weak self] in
             let notifications = NotificationCenter.default.notifications(named: .NSSystemTimeZoneDidChange)
             for await _ in notifications {
-                guard !Task.isCancelled else { return }
+                guard self != nil, !Task.isCancelled else { return }
                 await onChange()
             }
         }

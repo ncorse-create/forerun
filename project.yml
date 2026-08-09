@@ -44,12 +44,17 @@ targets:
       path: Forerun/Resources/Info.plist
       properties:
         CFBundleDisplayName: Forerun
+        # The palette is a single warm paper scheme with no dark variant, and locked
+        # decision "no theme picker" means there will not be one. Without this, system
+        # chrome (navigation titles, Form headers, LabeledContent) renders near-white
+        # on #FBF7F0 paper in Dark Appearance and is unreadable.
+        UIUserInterfaceStyle: Light
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        UIBackgroundModes: [fetch, processing]
+        UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers:
           - app.persue.forerun.refresh
         NSCalendarsFullAccessUsageDescription: "Forerun reads the events on the calendars you pick so it can plan the run-up to each one. Your events stay on this iPhone."

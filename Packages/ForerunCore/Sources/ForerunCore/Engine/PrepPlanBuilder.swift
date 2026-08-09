@@ -83,6 +83,81 @@ public enum PrepPlanBuilder {
         )
     }
 
+    // MARK: - Snoozing
+
+    /// Places a snoozed step using the same rules that placed it the first time.
+    ///
+    /// Snooze used to be `fireDate + 86_400`, which quietly escaped three invariants at once:
+    /// it could land inside quiet hours, it ignored the daily budget — so locked decision 3's
+    /// "6 per day across all events" stopped holding the moment anything was snoozed — and it
+    /// could push a "confirm your volunteers" reminder to the day *after* the service.
+    ///
+    /// Returns nil when there is nowhere legal left to put it, which the caller treats as
+    /// "there is no later worth offering," not as an error.
+    public static func placeSnooze(
+        desired: Date,
+        offsetSeconds: TimeInterval,
+        eventStart: Date,
+        isAllDay: Bool,
+        settings: EngineSettings,
+        context: SchedulingContext
+    ) -> Date? {
+        let anchor = anchorDate(
+            for: PlanInput(title: "", startDate: eventStart, isAllDay: isAllDay, kind: .unknown),
+            settings: settings,
+            calendar: context.calendar
+        )
+
+        // A pre-event step must still land before its event. Snoozing the last reminder past
+        // the thing it was reminding you about is the one outcome worse than not snoozing.
+        if offsetSeconds < 0 && desired >= anchor { return nil }
+
+        let probe = StepDraft(
+            playbookStepID: "snooze",
+            order: 0,
+            offsetSeconds: offsetSeconds,
+            fireDate: desired,
+            audience: .me,
+            actionVerb: "",
+            templateCopy: "",
+            isCore: true
+        )
+
+        guard var placed = resolveQuietHoursAndBusy(
+            desired, step: probe, anchor: anchor, settings: settings, context: context
+        ) else { return nil }
+
+        let perDayCount = Dictionary(
+            grouping: context.existingFireDates,
+            by: { context.calendar.startOfDay(for: $0) }
+        ).mapValues(\.count)
+        let budget = max(1, settings.dailyNotificationBudget)
+
+        // The budget walk goes *forward* here, unlike plan building. Invariant 6's "earlier,
+        // never later" protects a lead time the user did not choose; a snooze is a lead time the
+        // user did choose, and moving it earlier would undo the thing they just asked for.
+        var attempts = 0
+        while perDayCount[context.calendar.startOfDay(for: placed), default: 0] >= budget, attempts < 14 {
+            attempts += 1
+            let day = context.calendar.startOfDay(for: placed)
+            guard let nextDay = context.calendar.date(byAdding: .day, value: 1, to: day),
+                  let slot = context.calendar.date(
+                      bySettingHour: deliveryHour(for: settings), minute: 0, second: 0, of: nextDay
+                  )
+            else { return nil }
+            if offsetSeconds < 0 && slot >= anchor { return nil }
+            guard isClear(slot, settings: settings, context: context) else {
+                placed = slot
+                continue
+            }
+            placed = slot
+        }
+
+        guard placed > context.now else { return nil }
+        if offsetSeconds < 0 && placed >= anchor { return nil }
+        return placed
+    }
+
     // MARK: - Anchoring
 
     /// Invariant 9: an all-day event has no start time worth counting back from, so it anchors
@@ -297,7 +372,24 @@ public enum PrepPlanBuilder {
         return placed
     }
 
+    /// True when a date is outside quiet hours and outside every busy window.
+    static func isClear(
+        _ date: Date,
+        settings: EngineSettings,
+        context: SchedulingContext
+    ) -> Bool {
+        !isInQuietHours(date, settings: settings, calendar: context.calendar)
+            && !context.busyWindows.contains { $0.contains(date) }
+    }
+
     /// Invariants 4 and 5, resolved together because fixing one can break the other.
+    ///
+    /// Forward first, because a step nudged later is still a step. When forward would push a
+    /// pre-event step past its own event, the search reverses and walks back through delivery
+    /// slots — **re-checking both rules at every candidate**. An earlier version returned the
+    /// first earlier slot without re-checking, which put steps squarely inside a meeting whenever
+    /// a busy window extended past the event. Returning nil means the step is genuinely
+    /// unschedulable and is dropped rather than fired into a conflict.
     private static func resolveQuietHoursAndBusy(
         _ start: Date,
         step: StepDraft,
@@ -306,8 +398,8 @@ public enum PrepPlanBuilder {
         context: SchedulingContext
     ) -> Date? {
         var date = start
-        // Each iteration either shifts the date forward or exits, and the forward shift is at
-        // least an hour, so this cannot spin. The bound is belt-and-braces.
+        // Each iteration shifts strictly forward, so this cannot spin. The bound also stops the
+        // search wandering days ahead when the calendar is wall-to-wall busy.
         for _ in 0..<12 {
             if isInQuietHours(date, settings: settings, calendar: context.calendar) {
                 date = nextDeliverySlot(after: date, settings: settings, calendar: context.calendar)
@@ -322,15 +414,23 @@ public enum PrepPlanBuilder {
             break
         }
 
-        guard date > context.now else { return nil }
-        // Shifting forward must not push a pre-event step past its event. When it would, fall
-        // back to the previous day's delivery slot rather than firing after the fact.
-        if step.offsetSeconds < 0 && date >= anchor {
-            let earlier = previousDeliverySlot(before: start, settings: settings, calendar: context.calendar)
-            guard earlier > context.now, earlier < anchor else { return nil }
-            return earlier
+        let isPreEvent = step.offsetSeconds < 0
+        if date > context.now,
+           isClear(date, settings: settings, context: context),
+           !(isPreEvent && date >= anchor) {
+            return date
         }
-        return date
+
+        // Forward failed. Walk back through delivery slots looking for one that clears both
+        // rules, is still in the future, and is still before the event.
+        var candidate = start
+        for _ in 0..<21 {
+            candidate = previousDeliverySlot(before: candidate, settings: settings, calendar: context.calendar)
+            guard candidate > context.now else { return nil }
+            if isPreEvent && candidate >= anchor { continue }
+            if isClear(candidate, settings: settings, context: context) { return candidate }
+        }
+        return nil
     }
 
     /// Invariant 6. Walks backwards a day at a time looking for room, and gives up rather than
@@ -349,7 +449,10 @@ public enum PrepPlanBuilder {
 
         for _ in 0..<14 {
             let day = calendar.startOfDay(for: date)
-            if perDayCount[day, default: 0] < budget { return date }
+            if perDayCount[day, default: 0] < budget,
+               isClear(date, settings: settings, context: context) {
+                return date
+            }
             guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else { return nil }
             guard let slot = calendar.date(
                 bySettingHour: deliveryHour(for: settings),
@@ -358,6 +461,9 @@ public enum PrepPlanBuilder {
                 of: previousDay
             ) else { return nil }
             guard slot > context.now else { return nil }
+            // A pre-event step deferred earlier still has to stay before its event; a follow-up
+            // has no such constraint.
+            if step.offsetSeconds < 0 && slot >= anchor { return nil }
             date = slot
         }
         return nil

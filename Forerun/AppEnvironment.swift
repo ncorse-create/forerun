@@ -52,6 +52,12 @@ final class AppEnvironment {
         notifications.context = context
         notifications.settings = settings
         notifications.scheduler = scheduler
+        notifications.planning = planning
+
+        // The provider is resolved once, asynchronously, because availability is a system
+        // query. Until it resolves, the heuristic provider is already in place — so a plan
+        // built in the first moments of launch is complete, just not tailored.
+        planning.use(provider: await ProviderResolver.make())
 
         UNUserNotificationCenter.current().delegate = notifications
         scheduler.registerCategories()
@@ -137,12 +143,11 @@ final class AppEnvironment {
         await scheduler.refreshWindow(context: context, settings: settings)
     }
 
-    func snooze(_ step: PrepStep) async {
-        step.snoozedUntil = (step.snoozedUntil ?? step.fireDate)
-            .addingTimeInterval(NotificationDelegate.snoozeInterval)
-        step.state = .snoozed
-        try? context.save()
-        await scheduler.refreshWindow(context: context, settings: settings)
+    /// Returns false when the step cannot legally move any later — the caller says so rather
+    /// than appearing to do nothing.
+    @discardableResult
+    func snooze(_ step: PrepStep) async -> Bool {
+        await planning.snooze(step)
     }
 
     // MARK: Rules

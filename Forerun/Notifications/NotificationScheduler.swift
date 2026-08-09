@@ -37,6 +37,7 @@ final class NotificationScheduler {
     /// Set when the window was larger than the limit, so Settings can say so honestly rather
     /// than letting later steps quietly not arrive.
     private(set) var truncatedStepCount = 0
+    private var isRefreshing = false
 
     init(center: UNUserNotificationCenter = .current()) {
         self.center = center
@@ -100,6 +101,13 @@ final class NotificationScheduler {
     /// changes, and getting that wrong means either a missing notification or a duplicate. The
     /// set is small enough that correctness is worth more than the saved work.
     func refreshWindow(context: ModelContext, settings: AppSettings, now: Date = .now) async {
+        // Three callers race this on a cold launch — app start, the scene becoming active, and
+        // the Events screen's task. Interleaved passes can remove an identifier another pass
+        // just added, leaving the window short until the next refresh.
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
         await refreshAuthorizationStatus()
         guard authorizationStatus == .authorized
             || authorizationStatus == .provisional
@@ -174,8 +182,17 @@ final class NotificationScheduler {
         content.interruptionLevel = .active
         // No badge. Ever. Locked decision 5 — `content.badge` is left nil on purpose.
 
-        let interval = max(1, entry.effectiveFireDate.timeIntervalSince(now))
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        // A calendar trigger, not an interval one. An interval trigger fires at an absolute
+        // instant, so a fire date up to fourteen days out that straddles a DST transition
+        // arrives an hour off its intended wall clock — which can put it inside quiet hours.
+        // The `NSSystemTimeZoneDidChange` recompute cannot save it either: the app is suspended
+        // at 02:00 when the transition lands, so the correction only arrives on the next
+        // foreground, possibly after the mis-timed notification has already gone out.
+        let target = max(entry.effectiveFireDate, now.addingTimeInterval(1))
+        let components = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute], from: target
+        )
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         return UNNotificationRequest(
             identifier: entry.step.notificationIdentifier,
             content: content,

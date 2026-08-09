@@ -95,8 +95,15 @@ an eleventh is a v1.1 request.
 1. No step fires in the past. If the event is closer than the first offset, **compress**:
    scale remaining offsets proportionally into the available window and set `wasCompressed`.
 2. **Audience ordering.** In any plan containing both a leader/volunteer step and a
-   participant/student step, every leader step fires strictly before every participant step.
-   If compression would violate this, participant steps are dropped, never reordered.
+   participant/student step, every leader step **in the run-up** fires strictly before every
+   participant step in the run-up. If compression would violate this, participant steps are
+   dropped, never reordered.
+
+   *Post-event steps are excluded from both sides.* The volunteer playbook ends with a +1d
+   "thank your leads" step; counting it would make it the latest leader step in every plan,
+   which would make every participant step look out of order and silently delete the −24h
+   "message the students" rung from every single team event. The invariant is about the
+   sequence of the ask, not about follow-ups.
 3. Cap at `maxStepsPerEvent`. Non-core steps drop first, latest-offset first.
 4. Never fire inside quiet hours — shift forward to `preferredDeliveryHour`.
 5. Never fire while another tracked event is in progress.

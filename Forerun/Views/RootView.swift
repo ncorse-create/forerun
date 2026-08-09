@@ -56,7 +56,7 @@ struct StoreFailureView: View {
                 .foregroundStyle(Palette.muted)
                 .multilineTextAlignment(.center)
             Text(String(describing: error))
-                .font(.system(.caption, design: .monospaced))
+                .font(TypeRamp.diagnostic())
                 .foregroundStyle(Palette.muted)
                 .textSelection(.enabled)
                 .padding(.top, 8)

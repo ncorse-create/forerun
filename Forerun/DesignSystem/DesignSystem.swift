@@ -68,6 +68,9 @@ public enum TypeRamp {
         .system(.headline, design: .serif, weight: .regular)
     }
 
+    /// Monospaced, for the one place raw diagnostic text is shown.
+    public static func diagnostic() -> Font { .system(.caption, design: .monospaced) }
+
     public static func body() -> Font { .system(.body) }
     public static func bodyEmphasis() -> Font { .system(.body, weight: .medium) }
     public static func caption() -> Font { .system(.subheadline) }
@@ -119,4 +122,41 @@ struct PaperBackground: ViewModifier {
 
 extension View {
     func paperBackground() -> some View { modifier(PaperBackground()) }
+}
+
+/// Serif navigation titles.
+///
+/// `navigationTitle` renders SF Pro and there is no SwiftUI modifier for its font, so the design
+/// system's first type rule — New York for screen titles — needs the UIKit appearance proxy.
+/// Applied once, at launch, rather than per screen.
+@MainActor
+enum NavigationBarAppearance {
+    static func apply() {
+        let ink = UIColor(Palette.ink)
+        let paper = UIColor(Palette.paper)
+
+        let large = UIFont.preferredFont(forTextStyle: .largeTitle)
+        let inline = UIFont.preferredFont(forTextStyle: .headline)
+        let largeSerif = serif(large)
+        let inlineSerif = serif(inline)
+
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = paper
+        appearance.shadowColor = .clear
+        appearance.largeTitleTextAttributes = [.font: largeSerif, .foregroundColor: ink]
+        appearance.titleTextAttributes = [.font: inlineSerif, .foregroundColor: ink]
+
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().compactAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+        UINavigationBar.appearance().tintColor = UIColor(Palette.amber)
+    }
+
+    /// Falls back to the original font when the serif design is unavailable, rather than
+    /// force-unwrapping a descriptor.
+    private static func serif(_ font: UIFont) -> UIFont {
+        guard let descriptor = font.fontDescriptor.withDesign(.serif) else { return font }
+        return UIFont(descriptor: descriptor, size: font.pointSize)
+    }
 }

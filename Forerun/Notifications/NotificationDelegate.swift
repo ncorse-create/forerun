@@ -17,6 +17,9 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     var context: ModelContext?
     var settings: AppSettings?
     weak var scheduler: NotificationScheduler?
+    /// Snooze is a scheduling decision, so it goes through the engine rather than through
+    /// arithmetic here. See `PlanningCoordinator.snooze`.
+    weak var planning: PlanningCoordinator?
     /// Set when a notification was tapped, so the app can open the right plan.
     var pendingDeepLink: DeepLink?
 
@@ -64,6 +67,10 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         switch actionIdentifier {
         case NotificationScheduler.Action.done:
             resolve(step, as: .done, fromNotification: true, context: context)
+            // Clear the delivered banner too, the same as Skip does. Leaving a notification for
+            // something already marked done sitting in Notification Center is the kind of small
+            // inconsistency that makes an app feel unreliable.
+            scheduler?.cancel(step)
 
         case NotificationScheduler.Action.skip:
             resolve(step, as: .skipped, fromNotification: true, context: context)
@@ -72,10 +79,14 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         case NotificationScheduler.Action.snooze:
             // Snoozing moves this one step and nothing else. It deliberately does not touch the
             // rest of the ladder — the other rungs were placed against the event, not against
-            // this one.
-            step.snoozedUntil = (step.snoozedUntil ?? step.fireDate)
-                .addingTimeInterval(Self.snoozeInterval)
-            step.state = .snoozed
+            // this one. Placement goes through the engine so quiet hours, the daily budget and
+            // the event's own start date all still apply.
+            if await planning?.snooze(step) != true {
+                // Nowhere legal left to put it. Skipping is the honest outcome: the step is
+                // pending for something that has already happened or is about to.
+                resolve(step, as: .skipped, fromNotification: true, context: context)
+                scheduler?.cancel(step)
+            }
 
         case UNNotificationDefaultActionIdentifier:
             pendingDeepLink = DeepLink(eventID: eventID, stepID: stepID)

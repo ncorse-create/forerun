@@ -32,33 +32,44 @@ private struct OnboardingScaffold<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Spacer(minLength: 40)
-            Text(title)
-                .font(TypeRamp.screenTitle())
-                .foregroundStyle(Palette.ink)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(body1)
-                .font(TypeRamp.body())
-                .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            if let body2 {
-                Text(body2)
-                    .font(TypeRamp.body())
-                    .foregroundStyle(Palette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            // Scrollable, because at accessibility Dynamic Type sizes this content is taller
+            // than the screen. Without it the spacers collapsed and the action button went off
+            // the bottom, which made onboarding literally unfinishable.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Spacer(minLength: 32)
+                    Text(title)
+                        .font(TypeRamp.screenTitle())
+                        .foregroundStyle(Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(body1)
+                        .font(TypeRamp.body())
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let body2 {
+                        Text(body2)
+                            .font(TypeRamp.body())
+                            .foregroundStyle(Palette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    content
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Metrics.hMargin)
+                .padding(.bottom, 24)
             }
-            content
-            Spacer()
+
+            // Pinned below the scroll view, so it is reachable at every type size.
             Button(actionTitle, action: action)
                 .font(TypeRamp.bodyEmphasis())
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background(Palette.amber, in: .rect(cornerRadius: 12))
                 .foregroundStyle(Palette.paper)
-            Spacer(minLength: 48)
+                .padding(.horizontal, Metrics.hMargin)
+                .padding(.bottom, 44)
         }
-        .padding(.horizontal, Metrics.hMargin)
     }
 }
 
@@ -130,9 +141,8 @@ private struct ChooseWhatToTrackPage: View {
             actionTitle: "Done",
             action: onFinish
         ) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(app.availableCalendars.prefix(8)) { calendar in
+            VStack(alignment: .leading, spacing: 4) {
+                    ForEach(app.availableCalendars) { calendar in
                         Toggle(isOn: Binding(
                             get: { app.settings.trackedCalendarIDs.contains(calendar.id) },
                             set: { newValue in
@@ -150,9 +160,7 @@ private struct ChooseWhatToTrackPage: View {
                         }
                         .tint(Palette.amber)
                     }
-                }
             }
-            .frame(maxHeight: 280)
         }
     }
 }

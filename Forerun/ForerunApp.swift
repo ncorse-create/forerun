@@ -11,6 +11,8 @@ struct ForerunApp: App {
     @State private var app: AppEnvironment?
 
     init() {
+        NavigationBarAppearance.apply()
+
         let result = Result { try ForerunStore.container() }
         container = result
 
