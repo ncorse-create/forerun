@@ -57,7 +57,9 @@ public enum PrepPlanBuilder {
 
         // 2 — Invariant 3: the per-event cap, applied before re-timing so the user's "5 steps"
         // is a statement about which rungs they get, not an accident of quiet hours.
+        let beforeCap = steps.count
         steps = applyStepCap(steps, limit: settings.maxStepsPerEvent)
+        let cappedAway = beforeCap - steps.count
 
         // 3 — Settle. Re-timing can drop steps, dropping can free budget, and both can break the
         // ordering rule, so the passes run until nothing changes.
@@ -75,11 +77,15 @@ public enum PrepPlanBuilder {
             .sorted { $0.fireDate < $1.fireDate }
         for index in steps.indices { steps[index].order = index }
 
+        // Split, because the compression banner's sentence is about the squeeze and would be
+        // wrong if it counted rungs the user's own step cap removed.
+        let totalDropped = max(0, playbook.steps.count - steps.count)
         return PlanDraft(
             playbookID: playbook.id,
             steps: steps,
             wasCompressed: wasCompressed,
-            droppedStepCount: max(0, playbook.steps.count - steps.count)
+            droppedStepCount: totalDropped,
+            droppedToCapCount: min(cappedAway, totalDropped)
         )
     }
 
@@ -133,28 +139,42 @@ public enum PrepPlanBuilder {
         ).mapValues(\.count)
         let budget = max(1, settings.dailyNotificationBudget)
 
-        // The budget walk goes *forward* here, unlike plan building. Invariant 6's "earlier,
-        // never later" protects a lead time the user did not choose; a snooze is a lead time the
-        // user did choose, and moving it earlier would undo the thing they just asked for.
-        var attempts = 0
-        while perDayCount[context.calendar.startOfDay(for: placed), default: 0] >= budget, attempts < 14 {
-            attempts += 1
-            let day = context.calendar.startOfDay(for: placed)
+        // The walk goes *forward*, unlike plan building. Invariant 6's "earlier, never later"
+        // protects a lead time the user did not choose; a snooze is a lead time they did choose,
+        // and moving it earlier would undo what they just asked for. It looks for a day that has
+        // room *and* is clear of quiet hours and meetings. It gives up rather than settling for the last candidate — an
+        // earlier version assigned every candidate to `placed` regardless, so it exited on a
+        // slot it had just proved was inside a meeting, and exited on the loop bound while the
+        // day was still over budget.
+        var candidate: Date? = placed
+        for _ in 0..<21 {
+            guard let current = candidate else { return nil }
+            let hasRoom = perDayCount[context.calendar.startOfDay(for: current), default: 0] < budget
+            if hasRoom, isClear(current, settings: settings, context: context) {
+                placed = current
+                candidate = current
+                break
+            }
+            let day = context.calendar.startOfDay(for: current)
             guard let nextDay = context.calendar.date(byAdding: .day, value: 1, to: day),
                   let slot = context.calendar.date(
                       bySettingHour: deliveryHour(for: settings), minute: 0, second: 0, of: nextDay
                   )
             else { return nil }
             if offsetSeconds < 0 && slot >= anchor { return nil }
-            guard isClear(slot, settings: settings, context: context) else {
-                placed = slot
-                continue
-            }
+            candidate = slot
             placed = slot
         }
 
+        // Post-check rather than trust: the loop can exit on its bound, and returning an
+        // over-budget or unclear date would put the whole point of routing snooze through the
+        // engine back where it started.
         guard placed > context.now else { return nil }
         if offsetSeconds < 0 && placed >= anchor { return nil }
+        guard isClear(placed, settings: settings, context: context) else { return nil }
+        guard perDayCount[context.calendar.startOfDay(for: placed), default: 0] < budget else {
+            return nil
+        }
         return placed
     }
 
@@ -193,7 +213,10 @@ public enum PrepPlanBuilder {
         let wanted = playbook.maximumLeadTime
         // Only compress when there is a run-up left to compress into. A zero or negative
         // available window means the event has started — only follow-ups remain.
-        let shouldCompress = available > 0 && wanted > 0 && available < wanted
+        // `<=`, not `<`. At exactly the playbook's maximum lead time the first rung lands
+        // precisely on `now` and is then dropped for not being in the future — so the one input
+        // where no compression is needed was the one that lost a step.
+        let shouldCompress = available > 0 && wanted > 0 && available <= wanted
         let scale = shouldCompress ? available / wanted : 1
 
         var drafts: [StepDraft] = []
@@ -269,8 +292,13 @@ public enum PrepPlanBuilder {
             guard !offenders.isEmpty else { return survivors }
 
             // Drop the earliest offender: it is the one that is out in front of the leaders.
-            // A pinned offender is the user's explicit choice, so it is left alone and the
-            // leader step it conflicts with is the one that has to move on a later pass.
+            //
+            // A pinned offender is left alone, and nothing later moves a leader step earlier to
+            // compensate — so a pinned participant step genuinely can sit in front of the whole
+            // leader sequence. That is deliberate and is stated in invariant 8: a human pin is
+            // the one thing that can reorder audiences. Locked decision 2 is about the *model*
+            // not reordering them, and the Plan screen flags the plan when it happens rather
+            // than silently discarding what the user asked for.
             guard let victim = offenders.filter({ !$0.isPinned }).min(by: { $0.fireDate < $1.fireDate }) else {
                 return survivors
             }
@@ -350,14 +378,20 @@ public enum PrepPlanBuilder {
 
             // Invariant 6: over budget defers the step *earlier*, never later. A prep step that
             // slides past the thing it was preparing for is worse than no step.
-            date = resolveBudget(
+            //
+            // A nil return means "there is nowhere left with room," and the step is dropped —
+            // not kept on the day that was already full. Coalescing to the original date here
+            // was silently breaking locked decision 3 under stock settings: one event plus a
+            // busy few days produced eight notifications on a six-per-day budget.
+            guard let budgeted = resolveBudget(
                 date,
                 step: step,
                 anchor: anchor,
                 settings: settings,
                 context: context,
                 perDayCount: &perDayCount
-            ) ?? date
+            ) else { continue }
+            date = budgeted
 
             guard date > context.now else { continue }
             // A pre-event step that got pushed past its own event is dropped rather than fired

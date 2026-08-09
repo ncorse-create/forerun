@@ -54,7 +54,28 @@ public struct PlanMergeResult: Sendable, Equatable {
     public var removedCount: Int
     public var wasCompressed: Bool
     public var droppedStepCount: Int
+    public var droppedToCapCount: Int
     public var playbookID: String
+
+    public init(
+        actions: [StepMergeAction],
+        preservedCount: Int,
+        insertedCount: Int,
+        removedCount: Int,
+        wasCompressed: Bool,
+        droppedStepCount: Int,
+        droppedToCapCount: Int = 0,
+        playbookID: String
+    ) {
+        self.actions = actions
+        self.preservedCount = preservedCount
+        self.insertedCount = insertedCount
+        self.removedCount = removedCount
+        self.wasCompressed = wasCompressed
+        self.droppedStepCount = droppedStepCount
+        self.droppedToCapCount = droppedToCapCount
+        self.playbookID = playbookID
+    }
 }
 
 public enum PlanRegenerator {
@@ -133,6 +154,7 @@ public enum PlanRegenerator {
             removedCount: removed,
             wasCompressed: draft.wasCompressed,
             droppedStepCount: draft.droppedStepCount,
+            droppedToCapCount: draft.droppedToCapCount,
             playbookID: draft.playbookID
         )
     }
@@ -140,14 +162,19 @@ public enum PlanRegenerator {
     /// The sentence the regenerate confirmation shows. Naming the number is the whole point —
     /// "regenerate" with nothing at stake should not read the same as "regenerate and lose the
     /// three sentences you rewrote."
+    /// Deliberately says "your wording" rather than "kept as they are": a step whose sentence
+    /// the user rewrote keeps that sentence but still follows the event if it moved, so claiming
+    /// nothing about it changes would be an over-claim.
     public static func confirmationMessage(for result: PlanMergeResult) -> String {
         switch result.preservedCount {
         case 0:
             "Forerun will rebuild this plan from the playbook. Nothing you've written will be lost."
         case 1:
-            "Forerun will rebuild this plan. The one step you edited will be kept as it is."
+            "Forerun will rebuild this plan. The one step you changed keeps your wording, your "
+                + "pinned time, or both."
         default:
-            "Forerun will rebuild this plan. The \(result.preservedCount) steps you edited will be kept as they are."
+            "Forerun will rebuild this plan. The \(result.preservedCount) steps you changed keep "
+                + "your wording, your pinned times, or both."
         }
     }
 }

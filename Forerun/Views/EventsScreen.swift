@@ -89,25 +89,66 @@ struct EventsScreen: View {
         }
     }
 
+    /// A `List`, not a `ScrollView`. `swipeActions` is a `List`-only modifier and silently does
+    /// nothing anywhere else, so untrack-by-swipe would have been dead UI. Row insets, separators
+    /// and backgrounds are all cleared so it still looks like the plain editorial list the design
+    /// system asks for rather than a grouped iOS table.
     private var eventList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ForEach(grouped, id: \.day) { group in
-                    Section {
-                        ForEach(group.events) { event in
-                            EventRow(
-                                event: event,
-                                isTracked: trackedSourceIDs.contains(event.sourceID),
-                                onToggle: { toggle(event) }
-                            )
-                            Hairline().padding(.leading, Metrics.hMargin)
-                        }
-                    } header: {
-                        DayHeader(day: group.day)
+        List {
+            ForEach(grouped, id: \.day) { group in
+                Section {
+                    ForEach(group.events) { event in
+                        row(for: event)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
+                } header: {
+                    DayHeader(day: group.day)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
             }
-            .padding(.bottom, 32)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, 0)
+    }
+
+    /// Tapping an untracked event tracks it; tapping a tracked one opens its plan. The plan
+    /// document said "tap again to untrack," but once an event has a ladder the thing you want
+    /// from a tap is to *see* the ladder — untracking moved to a swipe, which is also where iOS
+    /// users look for a destructive row action.
+    @ViewBuilder
+    private func row(for event: NormalizedEvent) -> some View {
+        if let tracked = app.trackedEvent(for: event.sourceID) {
+            NavigationLink {
+                PlanScreen(event: tracked)
+            } label: {
+                EventRow(event: event, isTracked: true, showsDisclosure: true, onToggle: nil)
+            }
+            .buttonStyle(.plain)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button("Untrack", systemImage: "minus.circle") {
+                    confirmUntrack(tracked, event: event)
+                }
+                .tint(Palette.muted)
+            }
+        } else {
+            EventRow(event: event, isTracked: false, showsDisclosure: false) {
+                Task { await app.track(event) }
+            }
+        }
+    }
+
+    private func confirmUntrack(_ tracked: TrackedEvent, event: NormalizedEvent) {
+        let hasWork = tracked.plan?.steps.contains(where: \.isUserOwned) == true
+            || !tracked.scratchpad.isEmpty
+        if hasWork {
+            confirmingUntrack = event
+        } else {
+            Task { await app.untrack(event) }
         }
     }
 
@@ -124,21 +165,6 @@ struct EventsScreen: View {
         return "Nothing on your calendar for the next 60 days."
     }
 
-    private func toggle(_ event: NormalizedEvent) {
-        if trackedSourceIDs.contains(event.sourceID) {
-            // Confirm only when there is something to lose. Untracking an event whose plan is
-            // untouched should not need a dialog.
-            let tracked = app.trackedEvent(for: event.sourceID)
-            let hasWork = tracked?.plan != nil || !(tracked?.scratchpad.isEmpty ?? true)
-            if hasWork {
-                confirmingUntrack = event
-            } else {
-                Task { await app.untrack(event) }
-            }
-        } else {
-            Task { await app.track(event) }
-        }
-    }
 }
 
 private struct DayHeader: View {
@@ -161,21 +187,38 @@ private struct DayHeader: View {
             .padding(.top, Metrics.sectionSpacing)
             .padding(.bottom, 8)
             .background(Palette.paper)
+            .overlay(alignment: .bottom) { Hairline().padding(.leading, Metrics.hMargin) }
     }
 }
 
 struct EventRow: View {
     let event: NormalizedEvent
     let isTracked: Bool
-    let onToggle: () -> Void
+    var showsDisclosure: Bool = false
+    let onToggle: (() -> Void)?
 
     private var timeLabel: String {
         event.isAllDay ? "All day" : event.startDate.formatted(date: .omitted, time: .shortened)
     }
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(alignment: .top, spacing: 12) {
+        Group {
+            if let onToggle {
+                Button(action: onToggle) { rowContent }
+                    .buttonStyle(.plain)
+            } else {
+                rowContent
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(event.title), \(timeLabel), \(event.calendarName)")
+        .accessibilityValue(isTracked ? "Tracked" : "Not tracked")
+        .accessibilityHint(isTracked ? "Double tap to open its plan" : "Double tap to plan the run-up")
+        .accessibilityAddTraits(isTracked ? [.isSelected] : [])
+    }
+
+    private var rowContent: some View {
+        HStack(alignment: .top, spacing: 12) {
                 // The tracked rail sits inside the 20pt margin, so the optical left edge of the
                 // row lines up with the day header and the hairline above it.
                 Spacer().frame(width: Metrics.hMargin - 8)
@@ -210,18 +253,18 @@ struct EventRow: View {
                     .foregroundStyle(Palette.muted)
                 }
 
-                Spacer(minLength: 8)
+            Spacer(minLength: 8)
+
+            if showsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.hairline)
+                    .padding(.top, 4)
             }
-            .padding(.trailing, Metrics.hMargin)
-            .padding(.vertical, Metrics.rowSpacing)
-            .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(event.title), \(timeLabel), \(event.calendarName)")
-        .accessibilityValue(isTracked ? "Tracked" : "Not tracked")
-        .accessibilityHint(isTracked ? "Double tap to stop tracking" : "Double tap to plan the run-up")
-        .accessibilityAddTraits(isTracked ? [.isSelected] : [])
+        .padding(.trailing, Metrics.hMargin)
+        .padding(.vertical, Metrics.rowSpacing)
+        .contentShape(.rect)
     }
 }
 

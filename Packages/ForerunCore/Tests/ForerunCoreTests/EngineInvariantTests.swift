@@ -107,22 +107,167 @@ struct EngineInvariantTests {
         #expect(first?.fireDate == start.addingTimeInterval(-21 * 86_400))
     }
 
-    @Test("Invariant 2 — every leader step fires strictly before every participant step")
+    @Test("Invariant 2 — every leader step in the run-up fires strictly before every participant step")
     func invariant2_leadersAlwaysPrecedeParticipants() {
-        for daysOut in [1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60] {
-            let start = now.addingTimeInterval(Double(daysOut) * 86_400)
-            let draft = PrepPlanBuilder.build(
-                input: input(start: start),
-                settings: .default,
-                context: context()
-            )
-            let leaderLatest = draft.steps.filter { $0.audience.isLeadership }.map(\.fireDate).max()
-            let audienceEarliest = draft.steps.filter { $0.audience.isAudienceSide }.map(\.fireDate).min()
-            if let leaderLatest, let audienceEarliest {
-                #expect(leaderLatest < audienceEarliest,
-                        "+\(daysOut)d: a participant step fires at or before a leader step")
+        // Swept across every cap, not just the default. At the default cap of 5 the +1d
+        // follow-up is dropped, which made this pass for the wrong reason — it was not
+        // exercising the configurations where a post-event leader step actually exists.
+        for cap in 3...8 {
+            for daysOut in [1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60] {
+                var settings = EngineSettings.default
+                settings.maxStepsPerEvent = cap
+                let start = now.addingTimeInterval(Double(daysOut) * 86_400)
+                let draft = PrepPlanBuilder.build(
+                    input: input(start: start),
+                    settings: settings,
+                    context: context()
+                )
+                let runUp = draft.steps.filter { $0.offsetSeconds < 0 }
+                let leaderLatest = runUp.filter { $0.audience.isLeadership }.map(\.fireDate).max()
+                let audienceEarliest = runUp.filter { $0.audience.isAudienceSide }.map(\.fireDate).min()
+                if let leaderLatest, let audienceEarliest {
+                    #expect(leaderLatest < audienceEarliest,
+                            "cap \(cap), +\(daysOut)d: a participant step fires at or before a leader step" as Comment)
+                }
             }
         }
+    }
+
+    @Test("Invariant 6 — the daily budget holds even when deferral has nowhere left to go")
+    func invariant6_budgetHoldsWhenDeferralFails() {
+        // The engine gate's finding: when `resolveBudget` could find no earlier day it returned
+        // nil, and the caller read that as "keep the original date" — putting eight
+        // notifications on a six-per-day budget under stock settings.
+        let settings = EngineSettings.default
+        let start = now.addingTimeInterval(1.5 * 86_400)
+
+        var saturating: [Date] = []
+        for dayOffset in 0..<3 {
+            for slot in 0..<settings.dailyNotificationBudget {
+                saturating.append(now.addingTimeInterval(
+                    Double(dayOffset) * 86_400 + Double(slot) * 600
+                ))
+            }
+        }
+
+        let draft = PrepPlanBuilder.build(
+            input: input(start: start),
+            settings: settings,
+            context: context(existing: saturating)
+        )
+
+        var perDay = Dictionary(grouping: saturating) { testCalendar.startOfDay(for: $0) }
+            .mapValues(\.count)
+        for step in draft.steps {
+            perDay[testCalendar.startOfDay(for: step.fireDate), default: 0] += 1
+        }
+        for (day, count) in perDay {
+            #expect(count <= settings.dailyNotificationBudget,
+                    "\(count) notifications on \(day) against a budget of \(settings.dailyNotificationBudget)" as Comment)
+        }
+    }
+
+    @Test("Invariant 6 — three events planned in sequence still share one budget")
+    func invariant6_sequentialEventsShareTheBudget() {
+        var settings = EngineSettings.default
+        settings.dailyNotificationBudget = 3
+        settings.maxStepsPerEvent = 8
+
+        var committed: [Date] = []
+        for offset in [0.75, 1.5, 2.25] {
+            let draft = PrepPlanBuilder.build(
+                input: input(title: "Event", start: now.addingTimeInterval(offset * 86_400)),
+                settings: settings,
+                context: context(existing: committed)
+            )
+            committed += draft.steps.map(\.fireDate)
+        }
+
+        let perDay = Dictionary(grouping: committed) { testCalendar.startOfDay(for: $0) }
+        for (day, dates) in perDay {
+            #expect(dates.count <= settings.dailyNotificationBudget, "\(dates.count) on \(day)" as Comment)
+        }
+    }
+
+    @Test("An event exactly at the playbook's maximum lead time keeps its first rung")
+    func exactMaximumLeadTimeKeepsEveryStep() {
+        var settings = EngineSettings.default
+        settings.maxStepsPerEvent = 8
+        let lead = PlaybookLibrary.volunteerTeamEvent.maximumLeadTime
+        let draft = PrepPlanBuilder.build(
+            input: input(start: now.addingTimeInterval(lead)),
+            settings: settings,
+            context: context()
+        )
+        #expect(draft.step("volunteerTeamEvent.d-21.leaders") != nil)
+        #expect(draft.steps.count == 8)
+    }
+
+    @Test("The compression banner's count excludes steps the user's own cap removed")
+    func droppedCountsAreSeparated() {
+        var settings = EngineSettings.default
+        settings.maxStepsPerEvent = 5
+        let draft = PrepPlanBuilder.build(
+            input: input(start: now.addingTimeInterval(45 * 86_400)),
+            settings: settings,
+            context: context()
+        )
+        #expect(!draft.wasCompressed)
+        #expect(draft.droppedStepCount == 3)
+        #expect(draft.droppedToCapCount == 3)
+        #expect(draft.droppedToCompressionCount == 0)
+    }
+
+    @Test("A snooze never lands over budget, inside quiet hours, or in a meeting")
+    func snoozeRespectsEveryPlacementRule() {
+        var settings = EngineSettings.default
+        settings.dailyNotificationBudget = 2
+
+        // Today is full, tomorrow morning is a long meeting.
+        let saturating = (0..<2).map { now.addingTimeInterval(Double($0) * 600) }
+        let meeting = DateInterval(
+            start: date(2026, 3, 5, 7),
+            end: date(2026, 3, 5, 9, 30)
+        )
+
+        let placed = PrepPlanBuilder.placeSnooze(
+            desired: now.addingTimeInterval(86_400),
+            offsetSeconds: 86_400,
+            eventStart: now.addingTimeInterval(-3_600),
+            isAllDay: false,
+            settings: settings,
+            context: context(busy: [meeting], existing: saturating)
+        )
+
+        guard let placed else { return }   // "nowhere legal" is a valid answer
+        #expect(!meeting.contains(placed))
+        #expect(!PrepPlanBuilder.isInQuietHours(placed, settings: settings, calendar: testCalendar))
+        let sameDay = saturating.filter { testCalendar.isDate($0, inSameDayAs: placed) }
+        #expect(sameDay.count < settings.dailyNotificationBudget)
+    }
+
+    @Test("A snooze with nowhere legal to go says so instead of inventing a slot")
+    func snoozeReportsWhenThereIsNoRoom() {
+        var settings = EngineSettings.default
+        settings.dailyNotificationBudget = 2
+
+        // Every day for a month is already at budget.
+        var saturating: [Date] = []
+        for day in 0..<30 {
+            for slot in 0..<2 {
+                saturating.append(now.addingTimeInterval(Double(day) * 86_400 + Double(slot) * 600))
+            }
+        }
+
+        let placed = PrepPlanBuilder.placeSnooze(
+            desired: now.addingTimeInterval(86_400),
+            offsetSeconds: 86_400,
+            eventStart: now.addingTimeInterval(-3_600),
+            isAllDay: false,
+            settings: settings,
+            context: context(existing: saturating)
+        )
+        #expect(placed == nil)
     }
 
     @Test("Invariant 2 — a post-event follow-up to leaders does not delete the participant step")

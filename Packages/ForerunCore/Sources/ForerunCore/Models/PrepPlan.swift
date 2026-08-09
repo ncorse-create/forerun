@@ -10,8 +10,16 @@ public final class PrepPlan {
     /// True when the lead time was shorter than the playbook wanted and the offsets had to be
     /// scaled into the window that was actually available.
     public var wasCompressed: Bool
-    /// How much of the playbook survived, for the compression banner's sentence.
+    /// How much of the playbook did not survive, for any reason.
     public var droppedStepCount: Int
+    /// How many of those the user's own per-event cap removed. The banner subtracts these so it
+    /// never blames the squeeze for a limit the user set.
+    public var droppedToCapCount: Int = 0
+
+    /// Steps lost to the squeeze specifically.
+    public var droppedToCompressionCount: Int {
+        max(0, droppedStepCount - droppedToCapCount)
+    }
 
     @Relationship(deleteRule: .cascade, inverse: \PrepStep.plan)
     public var steps: [PrepStep]
@@ -24,6 +32,7 @@ public final class PrepPlan {
         generatedAt: Date = .now,
         wasCompressed: Bool = false,
         droppedStepCount: Int = 0,
+        droppedToCapCount: Int = 0,
         steps: [PrepStep] = []
     ) {
         self.id = id
@@ -31,6 +40,7 @@ public final class PrepPlan {
         self.generatedAt = generatedAt
         self.wasCompressed = wasCompressed
         self.droppedStepCount = droppedStepCount
+        self.droppedToCapCount = droppedToCapCount
         self.steps = steps
     }
 }
@@ -38,6 +48,12 @@ public final class PrepPlan {
 public extension PrepPlan {
     var orderedSteps: [PrepStep] {
         steps.sorted { $0.order < $1.order }
+    }
+
+    /// Chronological rather than by stored order. Used when a step is added or re-timed and the
+    /// `order` field has to be brought back in line with the dates.
+    var orderedStepsByDate: [PrepStep] {
+        steps.sorted { ($0.snoozedUntil ?? $0.fireDate) < ($1.snoozedUntil ?? $1.fireDate) }
     }
 
     var pendingSteps: [PrepStep] {

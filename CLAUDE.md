@@ -111,7 +111,11 @@ an eleventh is a v1.1 request.
    *earlier* than the event, never later.
 7. Two steps for the same event never fire within 4 hours of each other. Compression never
    goes below that gap — it drops steps instead.
-8. Steps with `userPinnedTime` are exempt from 4, 6, and 7.
+8. Steps with `userPinnedTime` are exempt from 2, 4, 5, 6, and 7. A pin is a human decision,
+   and it is the **only** thing in the app that can reorder audiences — locked decision 2 is
+   about the model not reordering them, not about the user. Because nothing ever moves a leader
+   step *earlier* to compensate, a pinned participant step genuinely can sit in front of the
+   whole leader sequence; the Plan screen flags that rather than silently discarding the pin.
 9. All-day events anchor to `preferredDeliveryHour` on their date.
 10. Offsets are stored as intervals and fire dates are computed in the user's current
     calendar. Plans recompute on `NSSystemTimeZoneDidChange`.

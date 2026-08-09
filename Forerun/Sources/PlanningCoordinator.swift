@@ -100,7 +100,8 @@ final class PlanningCoordinator: PlanReconciling {
         let plan = PrepPlan(
             playbookID: draft.playbookID,
             wasCompressed: draft.wasCompressed,
-            droppedStepCount: draft.droppedStepCount
+            droppedStepCount: draft.droppedStepCount,
+            droppedToCapCount: draft.droppedToCapCount
         )
         plan.steps = draft.steps.map(makeStep(from:))
         event.plan = plan
@@ -225,12 +226,18 @@ final class PlanningCoordinator: PlanReconciling {
         let all = (try? context.fetch(FetchDescriptor<TrackedEvent>())) ?? []
         let others = all.filter { $0.id != event.id }
 
+        // `snoozedUntil ?? fireDate` — the same expression the scheduler fires on. Counting the
+        // original date instead charged the budget to a day the step will not fire on and left
+        // the day it *will* fire on looking empty, so every snooze quietly loosened the cap.
         let existingFireDates = others
             .compactMap(\.plan)
             .flatMap(\.steps)
             .filter { $0.state.isSchedulable }
-            .map(\.fireDate)
+            .map { $0.snoozedUntil ?? $0.fireDate }
 
+        // Built from `all`, not `others`, on purpose: you should not be reminded about something
+        // *during* the event it is about, including the event being planned. `existingFireDates`
+        // above correctly uses `others`, since an event's own steps must not consume its budget.
         let busyWindows = all.compactMap { tracked -> DateInterval? in
             guard !tracked.isAllDay else { return nil }
             let end = tracked.endDate ?? tracked.startDate.addingTimeInterval(3_600)
@@ -245,6 +252,13 @@ final class PlanningCoordinator: PlanReconciling {
             now: .now,
             timeZone: .current
         )
+    }
+
+    /// Custom steps are namespaced so one can never collide with a playbook rung. A collision
+    /// would permanently suppress that rung — regeneration sees the id already present and never
+    /// inserts the real one.
+    static func customStepID() -> String {
+        "custom.\(UUID().uuidString)"
     }
 
     private func makeStep(from draft: StepDraft) -> PrepStep {
@@ -308,6 +322,7 @@ final class PlanningCoordinator: PlanReconciling {
         plan.playbookID = result.playbookID
         plan.wasCompressed = result.wasCompressed
         plan.droppedStepCount = result.droppedStepCount
+        plan.droppedToCapCount = result.droppedToCapCount
         plan.generatedAt = .now
     }
 

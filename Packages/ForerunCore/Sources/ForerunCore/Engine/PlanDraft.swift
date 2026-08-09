@@ -143,23 +143,35 @@ public struct PlanDraft: Sendable, Equatable {
     public var playbookID: String
     public var steps: [StepDraft]
     public var wasCompressed: Bool
-    /// How many playbook steps did not survive. Drives the banner's sentence.
+    /// How many playbook steps did not survive, for any reason.
     public var droppedStepCount: Int
+    /// How many of those were removed by the user's own per-event cap rather than by the
+    /// squeeze. The compression banner subtracts these — telling someone the run-up was too
+    /// tight for three steps they themselves capped away would simply be wrong.
+    public var droppedToCapCount: Int
+
+    /// Steps lost to the squeeze specifically.
+    public var droppedToCompressionCount: Int {
+        max(0, droppedStepCount - droppedToCapCount)
+    }
 
     public init(
         playbookID: String,
         steps: [StepDraft],
         wasCompressed: Bool = false,
-        droppedStepCount: Int = 0
+        droppedStepCount: Int = 0,
+        droppedToCapCount: Int = 0
     ) {
         self.playbookID = playbookID
         self.steps = steps
         self.wasCompressed = wasCompressed
         self.droppedStepCount = droppedStepCount
+        self.droppedToCapCount = droppedToCapCount
     }
 
     public static func empty(playbookID: String) -> PlanDraft {
-        PlanDraft(playbookID: playbookID, steps: [], wasCompressed: false, droppedStepCount: 0)
+        PlanDraft(playbookID: playbookID, steps: [], wasCompressed: false,
+                  droppedStepCount: 0, droppedToCapCount: 0)
     }
 
     public var isEmpty: Bool { steps.isEmpty }

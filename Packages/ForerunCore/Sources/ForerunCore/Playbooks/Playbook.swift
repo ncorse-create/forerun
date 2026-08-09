@@ -52,6 +52,22 @@ public struct Playbook: Sendable, Equatable, Identifiable {
         self.provenance = provenance
     }
 
+    /// One line describing the shape of the ladder, for the kind picker: "5 steps, from 10 days
+    /// out." Generated rather than written so it cannot drift from the table above it.
+    public var stepSummary: String {
+        guard !steps.isEmpty else { return "No run-up" }
+        let count = steps.count
+        let lead = maximumLeadTime
+        let plural = count == 1 ? "step" : "steps"
+        guard lead > 0 else { return "\(count) \(plural)" }
+        let days = Int((lead / 86_400).rounded())
+        if days >= 1 {
+            return "\(count) \(plural), from \(days) day\(days == 1 ? "" : "s") out"
+        }
+        let hours = Int((lead / 3_600).rounded())
+        return "\(count) \(plural), from \(hours) hour\(hours == 1 ? "" : "s") out"
+    }
+
     /// The earliest lead time this playbook wants, as a positive interval.
     public var maximumLeadTime: TimeInterval {
         let leads = steps.map(\.offset).filter { $0 < 0 }.map(abs)
