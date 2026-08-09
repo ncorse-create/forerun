@@ -6,6 +6,8 @@ import SwiftUI
 /// two, never from a tab. Settings lives behind a gear.
 struct RootView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var app = AppEnvironment()
     @State private var selection: Destination = .today
 
     /// Not named `Tab` — SwiftUI owns that name in the iOS 18+ `TabView` API and shadowing it
@@ -15,15 +17,32 @@ struct RootView: View {
     }
 
     var body: some View {
-        TabView(selection: $selection) {
-            Tab("Today", systemImage: "sun.horizon", value: Destination.today) {
-                TodayScreen()
-            }
-            Tab("Events", systemImage: "calendar", value: Destination.events) {
-                EventsScreen()
+        Group {
+            if app.settings?.hasCompletedOnboarding == false {
+                OnboardingView()
+            } else {
+                TabView(selection: $selection) {
+                    Tab("Today", systemImage: "sun.horizon", value: Destination.today) {
+                        TodayScreen()
+                    }
+                    Tab("Events", systemImage: "calendar", value: Destination.events) {
+                        EventsScreen()
+                    }
+                }
             }
         }
         .tint(Palette.amber)
+        .environment(app)
+        .task {
+            app.bootstrap(context: context)
+            await app.reloadCalendars()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Foreground is one of the four reschedule triggers. The others are the background
+            // refresh task, a calendar change, and a settings change.
+            guard phase == .active else { return }
+            Task { await app.refresh() }
+        }
     }
 }
 
