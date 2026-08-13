@@ -46,7 +46,7 @@ struct EventsScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .paperBackground()
+            .fieldBackground()
             .safeAreaInset(edge: .bottom) {
                 UndoBanner()
                     .animation(.easeOut(duration: 0.2), value: app.pendingUndo)
@@ -105,15 +105,31 @@ struct EventsScreen: View {
 
     /// A `List`, not a `ScrollView`. `swipeActions` is a `List`-only modifier and silently does
     /// nothing anywhere else, so untrack-by-swipe would have been dead UI. Row insets, separators
-    /// and backgrounds are all cleared so it still looks like the plain editorial list the design
-    /// system asks for rather than a grouped iOS table.
+    /// and backgrounds are all cleared so the rows read as free-standing containers on the field
+    /// rather than as a grouped iOS table.
     private var eventList: some View {
         List {
+            if showsTapHint {
+                // Tap-to-track has no visible affordance once the rows are containers, so it is
+                // said once. It goes away for good after the first event is tracked.
+                Text("Everything on your calendars for the next 60 days. Tap one to track it; "
+                     + "swipe a tracked event to untrack.")
+                    .font(.system(.footnote))
+                    .foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Metrics.hMargin)
+                    .padding(.top, 7)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+
             ForEach(grouped, id: \.day) { group in
                 Section {
                     ForEach(group.events) { event in
                         row(for: event)
-                            .listRowInsets(EdgeInsets())
+                            .listRowInsets(EdgeInsets(top: 0, leading: Metrics.hMargin,
+                                                      bottom: 11, trailing: Metrics.hMargin))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                     }
@@ -130,6 +146,9 @@ struct EventsScreen: View {
         .environment(\.defaultMinListRowHeight, 0)
     }
 
+    /// Drops away once the user has tracked their first event — advice nobody needs twice.
+    private var showsTapHint: Bool { trackedEvents.isEmpty }
+
     /// Tapping an untracked event tracks it; tapping a tracked one opens its plan. The plan
     /// document said "tap again to untrack," but once an event has a ladder the thing you want
     /// from a tap is to *see* the ladder — untracking moved to a swipe, which is also where iOS
@@ -140,7 +159,8 @@ struct EventsScreen: View {
             NavigationLink {
                 PlanScreen(event: tracked)
             } label: {
-                EventRow(event: event, isTracked: true, showsDisclosure: true, onToggle: nil)
+                EventRow(event: event, isTracked: true, showsDisclosure: true,
+                         plan: tracked.plan, cap: app.settings.maxStepsPerEvent, onToggle: nil)
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -150,7 +170,8 @@ struct EventsScreen: View {
                 .tint(Palette.muted)
             }
         } else {
-            EventRow(event: event, isTracked: false, showsDisclosure: false) {
+            EventRow(event: event, isTracked: false, showsDisclosure: false,
+                     plan: nil, cap: app.settings.maxStepsPerEvent) {
                 Task { await app.track(event) }
             }
         }
@@ -193,22 +214,30 @@ private struct DayHeader: View {
 
     var body: some View {
         Text(label.uppercased())
-            .font(TypeRamp.micro())
-            .tracking(0.8)
+            .font(.system(.caption2, weight: .semibold))
+            .tracking(1.1)
             .foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Metrics.hMargin)
             .padding(.top, Metrics.sectionSpacing)
             .padding(.bottom, 8)
-            .background(Palette.paper)
-            .overlay(alignment: .bottom) { Hairline().padding(.leading, Metrics.hMargin) }
+            .background(Palette.paperSunk)
+            .overlay(alignment: .bottom) {
+                Hairline().padding(.horizontal, Metrics.hMargin)
+            }
+            .padding(.bottom, 12)
     }
 }
 
+/// An event as a container. **Elevation is what says "tracked"** — a tracked card lifts off the
+/// field and carries the amber rail and its rung dots; an untracked one is flat with a hairline
+/// border. Both share one internal grid so nothing shifts when the state changes.
 struct EventRow: View {
     let event: NormalizedEvent
     let isTracked: Bool
     var showsDisclosure: Bool = false
+    var plan: PrepPlan?
+    var cap: Int = 5
     let onToggle: (() -> Void)?
 
     private var timeLabel: String {
@@ -218,10 +247,10 @@ struct EventRow: View {
     var body: some View {
         Group {
             if let onToggle {
-                Button(action: onToggle) { rowContent }
+                Button(action: onToggle) { card }
                     .buttonStyle(.plain)
             } else {
-                rowContent
+                card
             }
         }
         .accessibilityElement(children: .combine)
@@ -231,55 +260,70 @@ struct EventRow: View {
         .accessibilityAddTraits(isTracked ? [.isSelected] : [])
     }
 
+    private var card: some View {
+        rowContent
+            .container(
+                radius: Metrics.rCard,
+                elevation: isTracked ? .tracked : .flat,
+                stroke: isTracked ? nil : Palette.hairline
+            )
+            .contentShape(.rect)
+            .animation(.easeOut(duration: 0.2), value: isTracked)
+    }
+
     private var rowContent: some View {
-        HStack(alignment: .top, spacing: 12) {
-                // The tracked rail sits inside the 20pt margin, so the optical left edge of the
-                // row lines up with the day header and the hairline above it.
-                Spacer().frame(width: Metrics.hMargin - 8)
+        HStack(alignment: .top, spacing: 11) {
+            // Always occupies its width so rows do not shift when an event is tracked — motion is
+            // for state changes, not for layout.
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(isTracked ? Palette.amber : Color.clear)
+                .frame(width: 3, height: 16)
+                .padding(.top, 3)
 
-                // Always occupies its width so rows do not shift when an event is tracked —
-                // motion is for state changes, not for layout.
-                Rectangle()
-                    .fill(isTracked ? Palette.amber : Color.clear)
-                    .frame(width: 3)
-                    .clipShape(.rect(cornerRadius: 1.5))
+            // The calendar family's own colour, *not* an audience colour. Both systems appear on
+            // this card and they mean different things.
+            Circle()
+                .fill(Palette.forColorFamily(event.colorFamily))
+                .frame(width: Metrics.dotSize, height: Metrics.dotSize)
+                .padding(.top, 6)
 
-                Circle()
-                    .fill(Palette.forColorFamily(event.colorFamily))
-                    .frame(width: Metrics.dotSize, height: Metrics.dotSize)
-                    .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(event.title)
+                    .font(TypeRamp.eventTitleCompact())
+                    .foregroundStyle(isTracked ? Palette.ink : Palette.graphite)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(event.title)
-                        .font(TypeRamp.eventTitleCompact())
-                        .foregroundStyle(Palette.ink)
-                        .multilineTextAlignment(.leading)
-                    HStack(spacing: 6) {
-                        Text(timeLabel)
+                HStack(spacing: 6) {
+                    Text(timeLabel)
+                    Text("·")
+                    Text(event.calendarName)
+                    if event.hasRecurrenceRules {
                         Text("·")
-                        Text(event.calendarName)
-                        if event.hasRecurrenceRules {
-                            Text("·")
-                            Text("repeats")
-                        }
+                        Text("repeats")
                     }
-                    .font(TypeRamp.caption())
-                    .foregroundStyle(Palette.muted)
                 }
+                .font(.system(.footnote))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+                if isTracked {
+                    RungDots(plan: plan, cap: cap)
+                        .padding(.top, 7)
+                }
+            }
 
             Spacer(minLength: 8)
 
             if showsDisclosure {
                 Image(systemName: "chevron.right")
-                    .font(TypeRamp.micro())
-                    .imageScale(.small)
-                    .foregroundStyle(Palette.hairline)
-                    .padding(.top, 4)
+                    .font(.system(.footnote, weight: .semibold))
+                    .foregroundStyle(Palette.chevron)
+                    .padding(.top, 5)
             }
         }
-        .padding(.trailing, Metrics.hMargin)
-        .padding(.vertical, Metrics.rowSpacing)
-        .contentShape(.rect)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
     }
 }
 

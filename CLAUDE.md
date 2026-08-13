@@ -85,8 +85,8 @@ NotificationScheduler        rolling 14-day window, < 50 pending requests
 | `Forerun/Sources` | `EventKitSource`, `TickTickSource` | EventKit, network |
 | `Forerun/Intelligence` | `FoundationModelsProvider`, `ProviderResolver` | FoundationModels |
 | `Forerun/Notifications` | `NotificationScheduler`, delegate, background refresh | UserNotifications, BackgroundTasks |
-| `Forerun/Views` | Today, Events, Plan, Settings | SwiftUI |
-| `Forerun/DesignSystem` | palette, type ramp, timeline rail | SwiftUI |
+| `Forerun/Views` | Today, Upcoming, Events, Plan, Settings | SwiftUI |
+| `Forerun/DesignSystem` | palette (light+dark), type ramp, containers, timeline rail | SwiftUI |
 
 `ForerunCore` imports **no** SwiftUI, **no** EventKit, **no** FoundationModels, and no
 networking. That is what makes the engine testable with `swift test` on macOS with no
@@ -150,7 +150,25 @@ Warm editorial, not productivity-app cold.
   ladder is a vertical timeline with a hairline rail, not a list of boxes.
 - **Motion:** state changes only. No decorative animation.
 - **Empty states:** a sentence, not an illustration.
-- **Screens:** Today, Events, Plan. Settings behind a gear. That is the whole app.
+- **Screens:** Today, Upcoming, Events, Plan. Settings behind a gear. That is the whole app.
+
+### Containers
+
+The three tab screens are a **container** layout: cards on a deeper field (`paperSunk`), where size
+and elevation carry meaning rather than decoration. Plan and the sheets stay flat on `paper`.
+
+- "No cards within cards" holds in the narrower form: **a container never contains another
+  container.** Inside a card, grouping is hairlines and the tinted footer band.
+- Elevation is `.container(surface:radius:elevation:)`. In light it is shadow; in dark a shadow is
+  invisible, so the same case resolves to surface lift plus a lit top edge. Call sites never know
+  which mode they are in.
+- Every shadow is **warm ink**, never grey or black. Grey reads as a productivity dashboard.
+- Additional tokens: `paperLift`, `hairlineSoft`, `footerTint`, `dotSpent`, `dateOutside`,
+  `chevron`. Every token is dynamic — one `UIColor` resolving light or dark, with the SwiftUI
+  `Color` derived from it, so the UIKit appearance proxy can never drift from the views.
+- **Rung dots** (`RungDots`) show what is *left* of a ladder and empty as you work. They are a
+  countdown, never a bar that fills toward a finished state — decision 4 rules out completion
+  percentages, and a gauge that fills is the same idea wearing dots.
 
 ---
 

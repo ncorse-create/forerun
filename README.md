@@ -30,8 +30,8 @@ Packages/ForerunCore   models, playbooks, the planning engine — pure Foundatio
 Forerun/Sources        EventKit + TickTick sources, sync, calendar write-back
 Forerun/Intelligence   on-device Foundation Models provider (writes sentences, never dates)
 Forerun/Notifications  scheduler, delegate, background refresh
-Forerun/Views          Today, Events, Plan, Settings, bulk add, onboarding
-Forerun/DesignSystem   palette, type ramp, timeline rail
+Forerun/Views          Today, Upcoming, Events, Plan, Settings, bulk add, onboarding
+Forerun/DesignSystem   palette (light + dark), type ramp, containers, timeline rail
 ```
 
 The engine lives in a local Swift package with no UI and no SwiftData dependency, so the whole

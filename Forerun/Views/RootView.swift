@@ -2,8 +2,11 @@ import ForerunCore
 import SwiftData
 import SwiftUI
 
-/// Three screens is the whole app. Today, Events, Plan — and Plan is reached from the other
-/// two, never from a tab. Settings lives behind a gear.
+/// Today, Upcoming, Events — and Plan, which is reached from any of them but never owns a tab.
+/// Settings lives behind a gear.
+///
+/// Upcoming sits in the middle because it answers the question between the other two: Today is
+/// now, Events is what to watch, and Upcoming is what is building.
 struct RootView: View {
     @Environment(AppEnvironment.self) private var app
     @Environment(\.scenePhase) private var scenePhase
@@ -12,7 +15,7 @@ struct RootView: View {
     /// Not named `Tab` — SwiftUI owns that name in the iOS 18+ `TabView` API and shadowing it
     /// makes the builder unusable.
     enum Destination: Hashable {
-        case today, events
+        case today, upcoming, events
     }
 
     var body: some View {
@@ -23,6 +26,9 @@ struct RootView: View {
                 TabView(selection: $selection) {
                     Tab("Today", systemImage: "sun.horizon", value: Destination.today) {
                         TodayScreen()
+                    }
+                    Tab("Upcoming", systemImage: "rectangle.stack", value: Destination.upcoming) {
+                        UpcomingScreen()
                     }
                     Tab("Events", systemImage: "calendar", value: Destination.events) {
                         EventsScreen()
