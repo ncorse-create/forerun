@@ -35,12 +35,18 @@ struct EventsScreen: View {
         NavigationStack {
             Group {
                 if app.calendarAccessError != nil {
-                    CalendarAccessGate()
+                    VStack(spacing: 0) {
+                        header
+                        CalendarAccessGate()
+                    }
                 } else if app.sync.browsableEvents.isEmpty {
                     // Three genuinely different states, not one sentence covering all of them.
                     // "Tap an event" is wrong advice when there is no event to tap.
-                    EmptyStateSentence(sentence: emptyStateSentence)
-                        .frame(maxHeight: .infinity)
+                    VStack(spacing: 0) {
+                        header
+                        EmptyStateSentence(sentence: emptyStateSentence)
+                        Spacer(minLength: 0)
+                    }
                 } else {
                     eventList
                 }
@@ -51,31 +57,11 @@ struct EventsScreen: View {
                 UndoBanner()
                     .animation(.easeOut(duration: 0.2), value: app.pendingUndo)
             }
-            .navigationTitle("Events")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingBulkAdd = true
-                    } label: {
-                        Label("Add in bulk", systemImage: "calendar.badge.plus")
-                    }
-                    .disabled(app.sync.browsableEvents.isEmpty)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingRules = true
-                    } label: {
-                        Label("Tracking rules", systemImage: "line.3.horizontal.decrease")
-                    }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                }
-            }
+            // Header drawn in the content rather than by the nav bar: a large `navigationTitle`
+            // reserves a band of nav-bar paper above a paperSunk field, which reads as empty
+            // space. All three entry points keep their placement — gear leading, rules and
+            // add-in-bulk trailing.
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showingRules) { TrackingRulesSheet() }
             .sheet(isPresented: $showingSettings) { SettingsScreen() }
             .sheet(isPresented: $showingBulkAdd) { BulkAddScreen() }
@@ -109,20 +95,10 @@ struct EventsScreen: View {
     /// rather than as a grouped iOS table.
     private var eventList: some View {
         List {
-            if showsTapHint {
-                // Tap-to-track has no visible affordance once the rows are containers, so it is
-                // said once. It goes away for good after the first event is tracked.
-                Text("Everything on your calendars for the next 60 days. Tap one to track it; "
-                     + "swipe a tracked event to untrack.")
-                    .font(.system(.footnote))
-                    .foregroundStyle(Palette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, Metrics.hMargin)
-                    .padding(.top, 7)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-            }
+            header
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
 
             ForEach(grouped, id: \.day) { group in
                 Section {
@@ -148,6 +124,58 @@ struct EventsScreen: View {
 
     /// Drops away once the user has tracked their first event — advice nobody needs twice.
     private var showsTapHint: Bool { trackedEvents.isEmpty }
+
+    /// The icon row, the title and the hint — the three things the design draws above the days.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                headerButton("Settings", "gearshape") { showingSettings = true }
+                Spacer(minLength: 8)
+                headerButton("Tracking rules", "line.3.horizontal.decrease") { showingRules = true }
+                headerButton("Add in bulk", "calendar.badge.plus") { showingBulkAdd = true }
+                    .disabled(app.sync.browsableEvents.isEmpty)
+            }
+            // 4 + the button's own 12 puts each glyph's edge on the 16pt margin while the tap
+            // target stays 45pt square.
+            .padding(.horizontal, 4)
+            .padding(.top, 4)
+
+            Text("Events")
+                .font(TypeRamp.screenTitle())
+                .foregroundStyle(Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Metrics.hMargin)
+                .padding(.top, 14)
+
+            if showsTapHint {
+                // Tap-to-track has no visible affordance once the rows are containers, so it is
+                // said once. It goes for good after the first event is tracked.
+                Text("Everything on your calendars for the next 60 days. Tap one to track it; "
+                     + "swipe a tracked event to untrack.")
+                    .font(.system(.footnote))
+                    .foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Metrics.hMargin)
+                    .padding(.top, 7)
+            }
+        }
+    }
+
+    private func headerButton(
+        _ label: String,
+        _ symbol: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 21))
+                .foregroundStyle(Palette.amber)
+                .padding(12)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
 
     /// Tapping an untracked event tracks it; tapping a tracked one opens its plan. The plan
     /// document said "tap again to untrack," but once an event has a ladder the thing you want

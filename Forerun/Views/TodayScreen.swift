@@ -354,9 +354,10 @@ private struct FollowerCard: View {
                         .foregroundStyle(Palette.ink)
                 }
                 Spacer(minLength: 8)
-                Text(step.relativeLabel)
+                Text(step.compactOffsetLabel)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(Palette.muted)
+                    .accessibilityLabel(step.relativeLabel)
             }
 
             Text(step.effectiveCopy)

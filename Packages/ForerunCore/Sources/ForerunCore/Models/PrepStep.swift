@@ -150,4 +150,19 @@ public extension PrepStep {
         let unit = days == 1 ? "day" : "days"
         return after ? "\(days) \(unit) after" : "\(days) \(unit) before"
     }
+
+    /// `−4d`, `−18h`, `+1d`. The compact form, for the mono column on a card where the sentence
+    /// is already carrying the meaning and the offset only has to be scannable.
+    ///
+    /// A true minus sign (U+2212), not a hyphen: at mono sizes a hyphen sits too high and too
+    /// short to read as a sign.
+    var compactOffsetLabel: String {
+        let magnitude = abs(offsetSeconds)
+        let sign = offsetSeconds > 0 ? "+" : "\u{2212}"
+        if magnitude < 3_600 { return "0" }
+        if magnitude < 86_400 {
+            return "\(sign)\(Int((magnitude / 3_600).rounded()))h"
+        }
+        return "\(sign)\(Int((magnitude / 86_400).rounded()))d"
+    }
 }

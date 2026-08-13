@@ -11,7 +11,22 @@ struct UpcomingScreen: View {
     @Environment(AppEnvironment.self) private var app
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var path = NavigationPath()
+    @State private var isScrolled = false
     @Query private var trackedEvents: [TrackedEvent]
+
+    /// Screen 3c's header: the large title collapses to this on scroll.
+    private var inlineTitleBar: some View {
+        VStack(spacing: 0) {
+            Text("Upcoming")
+                .font(.system(.headline, design: .serif))
+                .foregroundStyle(Palette.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 11)
+            Rectangle().fill(Palette.hairline).frame(height: 1)
+        }
+        .background(Palette.paperSunk.ignoresSafeArea(edges: .top))
+        .transition(.opacity)
+    }
 
     /// Monday first, as the design draws it.
     private var calendar: Calendar {
@@ -112,10 +127,17 @@ struct UpcomingScreen: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    Text("Upcoming")
+                        .font(TypeRamp.screenTitle())
+                        .foregroundStyle(Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+
                     Text("The week, then the month.")
                         .font(.system(.subheadline))
                         .foregroundStyle(Palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
 
                     if asks.isEmpty {
                         EmptyStateSentence(sentence: "Nothing is building. Track an event and its "
@@ -129,9 +151,21 @@ struct UpcomingScreen: View {
                 .padding(.horizontal, Metrics.hMargin)
                 .padding(.bottom, 24)
             }
+            // The title is drawn in the content, not by the nav bar: a large `navigationTitle`
+            // reserves a band of nav-bar paper above a paperSunk field, which reads as an empty
+            // header. It collapses to an inline serif bar on scroll instead.
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y > 36
+            } action: { _, scrolled in
+                isScrolled = scrolled
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .fieldBackground()
-            .navigationTitle("Upcoming")
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .top) {
+                if isScrolled { inlineTitleBar }
+            }
+            .animation(.easeOut(duration: 0.15), value: isScrolled)
             .refreshable { await app.refresh() }
             .navigationDestination(for: TrackedEvent.self) { event in
                 PlanScreen(event: event)

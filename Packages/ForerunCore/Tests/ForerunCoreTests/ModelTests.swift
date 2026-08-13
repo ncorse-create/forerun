@@ -28,6 +28,44 @@ private func makeEvent(
     )
 }
 
+@Suite("Compact offsets")
+struct CompactOffsetTests {
+
+    private func step(_ seconds: TimeInterval) -> PrepStep {
+        PrepStep(
+            order: 0,
+            offsetSeconds: seconds,
+            fireDate: .now,
+            audience: .leaders,
+            actionVerb: "ask",
+            templateCopy: "x",
+            isCore: true,
+            playbookStepID: "x"
+        )
+    }
+
+    @Test("Days before carry a true minus sign, not a hyphen")
+    func daysBefore() {
+        // A hyphen sits too high and too short to read as a sign in the mono face.
+        #expect(step(-4 * 86_400).compactOffsetLabel == "\u{2212}4d")
+    }
+
+    @Test("Days after carry a plus")
+    func daysAfter() {
+        #expect(step(86_400).compactOffsetLabel == "+1d")
+    }
+
+    @Test("Under a day reports hours, so an 18-hour step never claims to be a day out")
+    func hours() {
+        #expect(step(-18 * 3_600).compactOffsetLabel == "\u{2212}18h")
+    }
+
+    @Test("At the event itself there is no offset to show")
+    func atTheEvent() {
+        #expect(step(0).compactOffsetLabel == "0")
+    }
+}
+
 @Suite("Persistence")
 @MainActor
 struct PersistenceTests {
