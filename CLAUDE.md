@@ -12,7 +12,8 @@ times — volunteers and leaders always contacted first.
 - **Stack:** Swift 6 (strict concurrency = complete), SwiftUI, SwiftData, EventKit,
   UserNotifications, BackgroundTasks, Foundation Models, MessageUI, Contacts, App Intents
 - **Cloud:** none. Everything is on-device. The only network code in the project is the
-  optional, off-by-default TickTick OAuth source.
+  optional, off-by-default TickTick OAuth source. Adding a second network call is a decision,
+  not a detail.
 
 ---
 
@@ -150,7 +151,7 @@ Warm editorial, not productivity-app cold.
   ladder is a vertical timeline with a hairline rail, not a list of boxes.
 - **Motion:** state changes only. No decorative animation.
 - **Empty states:** a sentence, not an illustration.
-- **Screens:** Today, Upcoming, Events, Plan. Settings behind a gear. That is the whole app.
+- **Screens:** Today, Upcoming, Events, Plan. Settings behind a gear.
 
 ### Containers
 

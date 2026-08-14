@@ -44,11 +44,14 @@ targets:
       path: Forerun/Resources/Info.plist
       properties:
         CFBundleDisplayName: Forerun
-        # The palette is a single warm paper scheme with no dark variant, and locked
-        # decision "no theme picker" means there will not be one. Without this, system
-        # chrome (navigation titles, Form headers, LabeledContent) renders near-white
-        # on #FBF7F0 paper in Dark Appearance and is unreadable.
-        UIUserInterfaceStyle: Light
+        # UIUserInterfaceStyle was pinned to Light here while the palette had no dark
+        # variant — without it, system chrome rendered near-white on #FBF7F0 paper and
+        # was unreadable. The palette is now fully dynamic (every token is one UIColor
+        # resolving light or dark, and the nav-bar appearance proxy is built from those
+        # same colours), so the pin is removed and the app follows the system.
+        #
+        # This file is GENERATED from this block. Editing Forerun/Resources/Info.plist
+        # directly is undone by the next `xcodegen generate`.
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
