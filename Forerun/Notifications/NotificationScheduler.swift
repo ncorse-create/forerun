@@ -204,6 +204,77 @@ final class NotificationScheduler {
         )
     }
 
+    // MARK: Verification
+
+    /// A pending request as **iOS** holds it, not as the app believes it to be.
+    ///
+    /// The distinction is the whole point. `pendingCount` is what the last scheduling pass
+    /// thought it wrote; this is what the system actually accepted and will actually deliver. If
+    /// those two ever disagree, the app is lying to the user about whether they will be reminded.
+    struct PendingReminder: Identifiable, Sendable {
+        let id: String
+        let title: String
+        let body: String
+        let fireDate: Date?
+        let isTest: Bool
+    }
+
+    /// Test reminders use their own prefix so `refreshWindow`'s "remove everything of ours" sweep
+    /// — which matches on `step.` — cannot delete one before it fires.
+    private static let testIdentifier = "diagnostic.test"
+
+    func pendingReminders() async -> [PendingReminder] {
+        await center.pendingNotificationRequests()
+            .map { request in
+                let fireDate: Date? = switch request.trigger {
+                case let calendarTrigger as UNCalendarNotificationTrigger:
+                    calendarTrigger.nextTriggerDate()
+                case let intervalTrigger as UNTimeIntervalNotificationTrigger:
+                    intervalTrigger.nextTriggerDate()
+                default:
+                    nil
+                }
+                return PendingReminder(
+                    id: request.identifier,
+                    title: request.content.title,
+                    body: request.content.body,
+                    fireDate: fireDate,
+                    isTest: request.identifier == Self.testIdentifier
+                )
+            }
+            .sorted { ($0.fireDate ?? .distantFuture) < ($1.fireDate ?? .distantFuture) }
+    }
+
+    /// Schedules one real reminder a few seconds out, so "do notifications work on this iPhone"
+    /// can be answered by looking at the lock screen instead of by reading code.
+    ///
+    /// Deliberately a real `UNNotificationRequest` through the real center with the real category
+    /// — a test that takes a different path proves nothing about the path that matters.
+    @discardableResult
+    func sendTestReminder(in seconds: TimeInterval = 15) async -> Bool {
+        guard await requestAuthorizationIfNeeded() else { return false }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Forerun"
+        content.body = "Reminders are working. This is the only one Forerun will ever send you "
+            + "that isn't about a real event."
+        content.sound = .default
+        content.categoryIdentifier = Category.step
+        content.interruptionLevel = .active
+
+        let request = UNNotificationRequest(
+            identifier: Self.testIdentifier,
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1, seconds), repeats: false)
+        )
+        do {
+            try await center.add(request)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: Cancellation
 
     func cancel(_ step: PrepStep) {

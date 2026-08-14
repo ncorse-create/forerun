@@ -103,6 +103,14 @@ struct SettingsScreen: View {
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                 }
             }
+            // Not buried in Diagnostics: "will this actually reach me" is the app's central
+            // promise, so checking it is a first-class thing to do.
+            NavigationLink {
+                ScheduledRemindersScreen()
+            } label: {
+                LabeledContent("Scheduled reminders",
+                               value: "\(app.scheduler.pendingCount)")
+            }
         } header: {
             Text("Reminders")
         } footer: {
